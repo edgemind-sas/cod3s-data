@@ -1,0 +1,60 @@
+name: temperature_monitor
+
+broker:
+  enable_metrics: true
+  history_size: 500
+
+sources:
+  # Simulate a temperature sensor
+  - type: random
+    channel: sensors.temperature.kitchen
+    params:
+      rate: 5.0          # 5 readings per second
+      max_messages: 50   # Run for 10 seconds
+      min_value: 18.0    # Min temp (°C)
+      max_value: 28.0    # Max temp (°C)
+
+transformations:
+  # Alert if temperature is too high
+  - type: filter
+    input_channels: sensors.temperature.**
+    output_channel: alerts.temperature.high
+    params:
+      predicate_code: "lambda msg: msg.value > 25.0"
+  
+  # Alert if temperature is too low
+  - type: filter
+    input_channels: sensors.temperature.**
+    output_channel: alerts.temperature.low
+    params:
+      predicate_code: "lambda msg: msg.value < 20.0"
+  
+  # Calculate rolling average (every 5 readings)
+  - type: aggregate
+    input_channels: sensors.temperature.**
+    output_channel: stats.temperature.avg
+    params:
+      window_type: count
+      window_size: 5
+      aggregation_fn_code: "lambda msgs: round(sum(m.value for m in msgs) / len(msgs), 2)"
+
+destinations:
+  # Show all raw sensor readings
+  - type: console
+    channel_pattern: sensors.**
+    params: {}
+  
+  # Show high temperature alerts
+  - type: console
+    channel_pattern: alerts.temperature.high
+    params: {}
+  
+  # Show low temperature alerts
+  - type: console
+    channel_pattern: alerts.temperature.low
+    params: {}
+  
+  # Show calculated averages
+  - type: console
+    channel_pattern: stats.**
+    params: {}

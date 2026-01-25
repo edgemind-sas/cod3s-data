@@ -1,0 +1,27 @@
+# Simple Pipeline Configuration Example
+# Generate sequential numbers and print to console
+
+name: simple_pipeline
+
+# Broker configuration (optional)
+broker:
+  enable_metrics: true
+  history_size: 100
+
+# Data sources
+sources:
+  - type: sequence
+    channel: numbers
+    params:
+      start_value: 1
+      end_value: 11  # Generates 1-10
+      rate: 2.0      # 2 messages per second
+
+# Transformations (optional)
+transformations: []
+
+# Data destinations
+destinations:
+  - type: console
+    channel_pattern: numbers
+    params: {}

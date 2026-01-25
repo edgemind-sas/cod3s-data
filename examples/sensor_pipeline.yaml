@@ -1,0 +1,69 @@
+# Sensor Monitoring Pipeline
+# Multi-sensor monitoring with filtering and aggregation
+
+name: sensor_monitoring
+
+broker:
+  enable_metrics: true
+  history_size: 1000
+
+sources:
+  # Temperature sensor
+  - type: random
+    channel: sensors.temperature.room1
+    params:
+      rate: 10.0           # 10 Hz
+      max_messages: 100    # Run for 10 seconds
+      value_min: 20.0      # Min temperature (°C)
+      value_max: 30.0      # Max temperature (°C)
+
+  # Pressure sensor
+  - type: random
+    channel: sensors.pressure.room1
+    params:
+      rate: 10.0           # 10 Hz
+      max_messages: 100
+      value_min: 1000.0    # Min pressure (hPa)
+      value_max: 1030.0    # Max pressure (hPa)
+
+transformations:
+  # Alert on high temperature
+  - type: filter
+    input_channels: sensors.temperature.**
+    output_channel: alerts.high_temp
+    params:
+      predicate_code: "lambda msg: msg.value > 28.0"
+
+  # Calculate average temperature
+  - type: aggregate
+    input_channels: sensors.temperature.**
+    output_channel: stats.temperature.avg
+    params:
+      window_type: count
+      window_size: 10
+      aggregation_fn_code: "lambda msgs: sum(m.value for m in msgs) / len(msgs)"
+
+  # Calculate average pressure
+  - type: aggregate
+    input_channels: sensors.pressure.**
+    output_channel: stats.pressure.avg
+    params:
+      window_type: count
+      window_size: 10
+      aggregation_fn_code: "lambda msgs: sum(m.value for m in msgs) / len(msgs)"
+
+destinations:
+  # Log all raw sensor data
+  - type: console
+    channel_pattern: sensors.**
+    params: {}
+
+  # Log alerts
+  - type: console
+    channel_pattern: alerts.**
+    params: {}
+
+  # Log statistics
+  - type: console
+    channel_pattern: stats.**
+    params: {}

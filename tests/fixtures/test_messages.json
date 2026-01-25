@@ -1,0 +1,20 @@
+[
+  {
+    "key": "temperature",
+    "timestamp": "2024-01-15T10:00:00Z",
+    "value": 25.5,
+    "tags": {"sensor": "TH001", "location": "room1"}
+  },
+  {
+    "key": "temperature",
+    "timestamp": "2024-01-15T10:01:00Z",
+    "value": 26.0,
+    "tags": {"sensor": "TH001", "location": "room1"}
+  },
+  {
+    "key": "humidity",
+    "timestamp": "2024-01-15T10:00:00Z",
+    "value": 65.0,
+    "tags": {"sensor": "HU001", "location": "room1"}
+  }
+]
