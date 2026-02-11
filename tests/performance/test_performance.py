@@ -263,6 +263,13 @@ class TestPipelinePerformance:
         await asyncio.wait_for(framework.run(), timeout=5.0)
 
         end_time = time.time()
+
+        # Allow fire-and-forget broker notification tasks to complete
+        await asyncio.sleep(0.5)
+
+        # Stop flushes destination buffers
+        await framework.stop()
+
         duration = end_time - start_time
 
         dest = framework.destinations[0]
@@ -277,8 +284,6 @@ class TestPipelinePerformance:
 
         assert len(messages) == 1000
         assert throughput > 1000  # Should easily exceed 1000 msg/s
-
-        await framework.stop()
 
     @pytest.mark.asyncio
     async def test_transformation_overhead(self):
