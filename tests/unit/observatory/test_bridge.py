@@ -107,25 +107,28 @@ class TestObservatoryBridge:
 
 
 class _FakeSource:
-    def __init__(self, component_id: str, channel: str, running: bool = False):
+    def __init__(self, component_id: str, channel: str, running: bool = False, label: str = ""):
         self._component_id = component_id
         self.channel = channel
         self._running = running
+        self._label = label
 
 
 class _FakeTransformation:
-    def __init__(self, component_id: str, input_channels: list[str], output_channel: str, running: bool = False):
+    def __init__(self, component_id: str, input_channels: list[str], output_channel: str, running: bool = False, label: str = ""):
         self._component_id = component_id
         self.input_channels = input_channels
         self.output_channel = output_channel
         self._running = running
+        self._label = label
 
 
 class _FakeDestination:
-    def __init__(self, component_id: str, channel_pattern: str, running: bool = False):
+    def __init__(self, component_id: str, channel_pattern: str, running: bool = False, label: str = ""):
         self._component_id = component_id
         self.channel_pattern = channel_pattern
         self._running = running
+        self._label = label
 
 
 class _FakeFramework:

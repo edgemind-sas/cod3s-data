@@ -11,6 +11,7 @@ broker:
 # Data sources
 sources:
   - type: sequence
+    label: "Compteur 1-10"
     channel: numbers
     params:
       start_value: 1
@@ -23,5 +24,6 @@ transformations: []
 # Data destinations
 destinations:
   - type: console
+    label: "Sortie Console"
     channel_pattern: numbers
     params: {}

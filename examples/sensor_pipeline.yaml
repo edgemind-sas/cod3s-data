@@ -10,6 +10,7 @@ broker:
 sources:
   # Temperature sensor
   - type: random
+    label: "Capteur Température"
     channel: sensors.temperature.room1
     params:
       rate: 10.0           # 10 Hz
@@ -19,6 +20,7 @@ sources:
 
   # Pressure sensor
   - type: random
+    label: "Capteur Pression"
     channel: sensors.pressure.room1
     params:
       rate: 10.0           # 10 Hz
@@ -29,6 +31,7 @@ sources:
 transformations:
   # Alert on high temperature
   - type: filter
+    label: "Alerte haute temp"
     input_channels: sensors.temperature.**
     output_channel: alerts.high_temp
     params:
@@ -36,6 +39,7 @@ transformations:
 
   # Calculate average temperature
   - type: aggregate
+    label: "Moyenne Température"
     input_channels: sensors.temperature.**
     output_channel: stats.temperature.avg
     params:
@@ -45,6 +49,7 @@ transformations:
 
   # Calculate average pressure
   - type: aggregate
+    label: "Moyenne Pression"
     input_channels: sensors.pressure.**
     output_channel: stats.pressure.avg
     params:
@@ -55,15 +60,18 @@ transformations:
 destinations:
   # Log all raw sensor data
   - type: console
+    label: "Log Capteurs"
     channel_pattern: sensors.**
     params: {}
 
   # Log alerts
   - type: console
+    label: "Log Alertes"
     channel_pattern: alerts.**
     params: {}
 
   # Log statistics
   - type: console
+    label: "Log Statistiques"
     channel_pattern: stats.**
     params: {}

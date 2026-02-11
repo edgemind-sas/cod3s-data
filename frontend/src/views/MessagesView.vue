@@ -11,58 +11,165 @@
     </v-card>
 
     <template v-else>
-      <v-chip class="mb-4 mr-2" size="small" color="primary">
-        {{ messagesStore.messageCount }} messages
-      </v-chip>
-      <v-chip
-        v-for="ch in messagesStore.channels"
-        :key="ch"
-        class="mb-4 mr-2"
-        size="small"
-        variant="outlined"
-      >
-        {{ ch }}
-      </v-chip>
+      <!-- Filter bar -->
+      <div class="d-flex align-center flex-wrap ga-2 mb-4">
+        <v-text-field
+          v-model="keyFilter"
+          density="compact"
+          variant="outlined"
+          placeholder="Filter by key..."
+          prepend-inner-icon="mdi-magnify"
+          hide-details
+          clearable
+          style="max-width: 260px"
+        />
 
-      <v-table density="compact">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Channel</th>
-            <th>Key</th>
-            <th>Subscribers</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(msg, i) in recentMessages" :key="i">
-            <td class="text-caption">{{ formatTime(msg.timestamp) }}</td>
-            <td>
-              <v-chip size="x-small" variant="tonal">{{ msg.channel }}</v-chip>
-            </td>
-            <td>{{ msg.key ?? '-' }}</td>
-            <td>{{ msg.subscriber_count }}</td>
-          </tr>
-        </tbody>
-      </v-table>
+        <v-chip
+          v-for="ch in messagesStore.channels"
+          :key="ch"
+          size="small"
+          :color="selectedChannel === ch ? channelColor(ch) : undefined"
+          :variant="selectedChannel === ch ? 'flat' : 'outlined'"
+          @click="toggleChannel(ch)"
+        >
+          {{ ch }}
+        </v-chip>
+
+        <v-spacer />
+
+        <span class="text-caption text-medium-emphasis">
+          {{ filteredMessages.length }} / {{ messagesStore.messageCount }} messages
+        </span>
+
+        <v-btn
+          :icon="autoScroll ? 'mdi-pause' : 'mdi-play'"
+          size="small"
+          variant="text"
+          :color="autoScroll ? 'primary' : undefined"
+          @click="autoScroll = !autoScroll"
+          :title="autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'"
+        />
+      </div>
+
+      <!-- Messages table -->
+      <v-card>
+        <div ref="tableContainer" class="messages-table-wrap">
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th style="width: 140px">Time</th>
+                <th style="width: 120px">Channel</th>
+                <th style="width: 120px">Key</th>
+                <th>Value</th>
+                <th>Tags</th>
+                <th style="width: 90px" class="text-right">Subscribers</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(msg, i) in filteredMessages" :key="i">
+                <td class="text-caption text-medium-emphasis" style="font-family: monospace">
+                  {{ formatTime(msg.timestamp) }}
+                </td>
+                <td>
+                  <v-chip
+                    size="x-small"
+                    variant="flat"
+                    :color="channelColor(msg.channel)"
+                  >
+                    {{ msg.channel }}
+                  </v-chip>
+                </td>
+                <td class="text-body-2">{{ msg.key ?? '-' }}</td>
+                <td class="text-body-2 text-truncate" style="max-width: 200px" :title="msg.value_preview">
+                  {{ msg.value_preview || '-' }}
+                </td>
+                <td>
+                  <v-chip
+                    v-for="(v, k) in msg.tags"
+                    :key="String(k)"
+                    size="x-small"
+                    variant="outlined"
+                    class="mr-1"
+                  >
+                    {{ k }}={{ v }}
+                  </v-chip>
+                  <span v-if="!msg.tags || Object.keys(msg.tags).length === 0" class="text-medium-emphasis">-</span>
+                </td>
+                <td class="text-right">{{ msg.subscriber_count }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+        </div>
+      </v-card>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useMessagesStore } from '@/stores/messages'
+
+const PALETTE = ['#42A5F5', '#66BB6A', '#FFA726', '#EF5350', '#AB47BC', '#26C6DA', '#EC407A', '#8D6E63']
+
+function channelColor(channel: string): string {
+  let hash = 0
+  for (let i = 0; i < channel.length; i++) hash = (hash * 31 + channel.charCodeAt(i)) | 0
+  return PALETTE[Math.abs(hash) % PALETTE.length]
+}
 
 const messagesStore = useMessagesStore()
 
-const recentMessages = computed(() =>
-  [...messagesStore.messages].reverse().slice(0, 100)
-)
+const selectedChannel = ref<string | null>(null)
+const keyFilter = ref('')
+const autoScroll = ref(true)
+const tableContainer = ref<HTMLElement | null>(null)
+
+function toggleChannel(ch: string) {
+  selectedChannel.value = selectedChannel.value === ch ? null : ch
+}
+
+const filteredMessages = computed(() => {
+  let msgs = [...messagesStore.messages].reverse().slice(0, 200)
+  if (selectedChannel.value) {
+    msgs = msgs.filter(m => m.channel === selectedChannel.value)
+  }
+  if (keyFilter.value) {
+    const kf = keyFilter.value.toLowerCase()
+    msgs = msgs.filter(m => m.key?.toLowerCase().includes(kf))
+  }
+  return msgs
+})
 
 function formatTime(ts: string): string {
   try {
-    return new Date(ts).toLocaleTimeString()
+    const d = new Date(ts)
+    const time = d.toLocaleTimeString()
+    const ms = String(d.getMilliseconds()).padStart(3, '0')
+    return `${time}.${ms}`
   } catch {
     return ts
   }
 }
+
+function scrollToBottom() {
+  if (tableContainer.value) {
+    tableContainer.value.scrollTop = tableContainer.value.scrollHeight
+  }
+}
+
+watch(
+  () => messagesStore.messageCount,
+  () => {
+    if (autoScroll.value) {
+      nextTick(scrollToBottom)
+    }
+  }
+)
 </script>
+
+<style scoped>
+.messages-table-wrap {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+</style>

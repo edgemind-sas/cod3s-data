@@ -28,6 +28,7 @@ async def main():
             # Temperature sensor - generates random values around 25°C
             SourceConfig(
                 type="random",
+                label="Capteur Température",
                 channel="sensors.temperature.room1",
                 params={
                     "rate": 10.0,  # 10 Hz
@@ -39,6 +40,7 @@ async def main():
             # Pressure sensor - generates random values around 1013 hPa
             SourceConfig(
                 type="random",
+                label="Capteur Pression",
                 channel="sensors.pressure.room1",
                 params={
                     "rate": 10.0,  # 10 Hz
@@ -52,6 +54,7 @@ async def main():
             # Filter: Alert on high temperature (>28°C)
             TransformConfig(
                 type="filter",
+                label="Alerte haute temp",
                 input_channels="sensors.temperature.**",
                 output_channel="alerts.high_temp",
                 params={
@@ -61,6 +64,7 @@ async def main():
             # Aggregate: Calculate average temperature every 10 readings
             TransformConfig(
                 type="aggregate",
+                label="Moyenne Température",
                 input_channels="sensors.temperature.**",
                 output_channel="stats.temperature.avg",
                 params={
@@ -72,6 +76,7 @@ async def main():
             # Aggregate: Calculate average pressure every 10 readings
             TransformConfig(
                 type="aggregate",
+                label="Moyenne Pression",
                 input_channels="sensors.pressure.**",
                 output_channel="stats.pressure.avg",
                 params={
@@ -85,24 +90,28 @@ async def main():
             # Log all raw sensor data
             DestinationConfig(
                 type="console",
+                label="Log Capteurs",
                 channel_pattern="sensors.**",
                 params={},
             ),
             # Log temperature alerts
             DestinationConfig(
                 type="console",
+                label="Log Alertes",
                 channel_pattern="alerts.**",
                 params={},
             ),
             # Log statistics
             DestinationConfig(
                 type="console",
+                label="Log Statistiques",
                 channel_pattern="stats.**",
                 params={},
             ),
             # Store metrics in memory for analysis
             DestinationConfig(
                 type="inmemory",
+                label="Stockage Métriques",
                 channel_pattern="_metrics.**",
                 params={},
             ),

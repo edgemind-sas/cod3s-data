@@ -32,6 +32,7 @@ class Transformation(ABC):
         # Observatory bridge (set by Framework when observatory is active)
         self._bridge: Any = None
         self._component_id: str = ""
+        self._label: str = ""
 
     async def start(self) -> None:
         """Start the transformation."""

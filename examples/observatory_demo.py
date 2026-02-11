@@ -29,6 +29,7 @@ async def main():
         sources=[
             SourceConfig(
                 type="random",
+                label="Capteur Température",
                 channel="sensors.temperature",
                 params={
                     "rate": 5.0,
@@ -39,6 +40,7 @@ async def main():
             ),
             SourceConfig(
                 type="sequence",
+                label="Compteur séquentiel",
                 channel="counters.seq",
                 params={
                     "start_value": 1,
@@ -48,8 +50,8 @@ async def main():
             ),
         ],
         destinations=[
-            DestinationConfig(type="console", channel_pattern="sensors.**"),
-            DestinationConfig(type="console", channel_pattern="counters.**"),
+            DestinationConfig(type="console", label="Log Capteurs", channel_pattern="sensors.**"),
+            DestinationConfig(type="console", label="Log Compteurs", channel_pattern="counters.**"),
         ],
     )
 

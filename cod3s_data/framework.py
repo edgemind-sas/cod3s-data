@@ -128,18 +128,21 @@ class Framework:
             source = self.factory.create_source(source_config)
             source._bridge = self._bridge
             source._component_id = f"src-{i}"
+            source._label = source_config.label or ""
             self.sources.append(source)
 
         for i, transform_config in enumerate(self.config.transformations):
             transform = self.factory.create_transformation(transform_config)
             transform._bridge = self._bridge
             transform._component_id = f"tfm-{i}"
+            transform._label = transform_config.label or ""
             self.transformations.append(transform)
 
         for i, dest_config in enumerate(self.config.destinations):
             destination = self.factory.create_destination(dest_config)
             destination._bridge = self._bridge
             destination._component_id = f"dst-{i}"
+            destination._label = dest_config.label or ""
             self.destinations.append(destination)
 
     async def _start_pipeline(self) -> None:

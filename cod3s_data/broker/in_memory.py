@@ -149,17 +149,27 @@ class InMemoryBroker(Broker):
             except Exception as e:
                 _logger.warning("Observatory hook error", hook="on_message_published", error=str(e))
 
+            # Forward _metrics.* messages as metric events
+            if channel.startswith("_metrics."):
+                try:
+                    await self._bridge.on_metric_emitted(
+                        metric_name=getattr(message, "key", channel),
+                        value=getattr(message, "value", 0),
+                        tags=dict(getattr(message, "tags", {})),
+                    )
+                except Exception as e:
+                    _logger.warning("Observatory hook error", hook="on_metric_emitted", error=str(e))
+
         # Update metrics
         self._publish_count += 1
 
-        # Emit metrics (if enabled, avoid recursion)
-        if self._enable_metrics and not channel.startswith("_metrics."):
-            # Create a simple metric message
+        # Emit metrics (if enabled, avoid recursion, throttle to every 50 messages)
+        if self._enable_metrics and not channel.startswith("_metrics.") and self._publish_count % 50 == 0:
             metric_msg = Message(
-                key="messages_published",
+                key="broker.publish_count",
                 timestamp=publish_time,
-                value=1,
-                tags={"channel": channel},
+                value=self._publish_count,
+                tags={},
             )
             asyncio.create_task(
                 self.publish(
@@ -191,9 +201,9 @@ class InMemoryBroker(Broker):
             # Emit error metric
             if self._enable_metrics:
                 error_msg = Message(
-                    key="callback_error",
+                    key="broker.error_count",
                     timestamp=datetime.now(timezone.utc),
-                    value=1,
+                    value=self._error_count,
                     tags={"channel": channel, "error_type": type(e).__name__},
                 )
                 asyncio.create_task(
@@ -258,10 +268,10 @@ class InMemoryBroker(Broker):
         # Emit metric
         if self._enable_metrics:
             metric_msg = Message(
-                key="subscription_added",
+                key="broker.active_subscriptions",
                 timestamp=datetime.now(timezone.utc),
-                value=1,
-                tags={"pattern": pattern},
+                value=len(self._subscriptions),
+                tags={},
             )
             asyncio.create_task(
                 self.publish(
@@ -355,10 +365,10 @@ class InMemoryBroker(Broker):
         # Emit metric
         if self._enable_metrics:
             metric_msg = Message(
-                key="subscription_removed",
+                key="broker.active_subscriptions",
                 timestamp=datetime.now(timezone.utc),
-                value=1,
-                tags={"pattern": handle.pattern},
+                value=len(self._subscriptions),
+                tags={},
             )
             asyncio.create_task(
                 self.publish(

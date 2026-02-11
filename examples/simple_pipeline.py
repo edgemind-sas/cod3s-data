@@ -20,6 +20,7 @@ async def main():
         sources=[
             SourceConfig(
                 type="sequence",
+                label="Compteur 1-10",
                 channel="numbers",
                 params={
                     "start_value": 1,
@@ -31,6 +32,7 @@ async def main():
         destinations=[
             DestinationConfig(
                 type="console",
+                label="Sortie Console",
                 channel_pattern="numbers",
                 params={},
             )

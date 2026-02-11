@@ -15,6 +15,7 @@ export const useTopologyStore = defineStore('topology', () => {
       id: n.component_id,
       type: n.component_type as TopologyNode['type'],
       state: n.state,
+      label: n.label || '',
       channels: n.channels ?? { publishes: [], subscribes: [] },
     }))
     edges.value = data.edges.map(e => ({
@@ -25,15 +26,19 @@ export const useTopologyStore = defineStore('topology', () => {
     }))
   }
 
-  function updateComponent(data: { component_id: string; component_type: string; new_state: string }) {
+  function updateComponent(data: { component_id: string; component_type: string; new_state: string; label?: string }) {
     const existing = nodes.value.find(n => n.id === data.component_id)
     if (existing) {
       existing.state = data.new_state
+      if (data.label !== undefined) {
+        existing.label = data.label
+      }
     } else {
       nodes.value.push({
         id: data.component_id,
         type: data.component_type as TopologyNode['type'],
         state: data.new_state,
+        label: data.label || '',
         channels: { publishes: [], subscribes: [] },
       })
     }

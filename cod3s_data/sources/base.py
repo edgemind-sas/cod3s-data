@@ -65,6 +65,7 @@ class Source(ABC):
         # Observatory bridge (set by Framework when observatory is active)
         self._bridge: Any = None
         self._component_id: str = ""
+        self._label: str = ""
 
     async def start(self) -> None:
         """
@@ -95,7 +96,9 @@ class Source(ABC):
             raise
 
         finally:
-            pass
+            if self._running:
+                self._running = False
+                await self._notify_state_change("running", "completed")
 
     async def stop(self) -> None:
         """Stop producing messages."""
@@ -124,10 +127,10 @@ class Source(ABC):
         """
         await self.broker.publish(self.channel, message, self.delivery_guarantee)
 
-        # Emit progress metric every 1000 messages
-        if self._message_count > 0 and self._message_count % 1000 == 0:
+        # Emit progress metric every 100 messages
+        if self._message_count > 0 and self._message_count % 100 == 0:
             metric_msg = Message(
-                key="messages_produced",
+                key="source.messages_produced",
                 timestamp=datetime.now(timezone.utc),
                 value=self._message_count,
                 tags={"channel": self.channel, "source": self.__class__.__name__},

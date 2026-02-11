@@ -25,6 +25,7 @@ async def main():
             # Generate sequence of numbers 1-100
             SourceConfig(
                 type="sequence",
+                label="Générateur 1-100",
                 channel="raw.data",
                 params={
                     "start_value": 1,
@@ -37,6 +38,7 @@ async def main():
             # Step 1: Filter - Keep only even numbers
             TransformConfig(
                 type="filter",
+                label="Filtre pairs",
                 input_channels="raw.data",
                 output_channel="filtered.evens",
                 params={
@@ -46,6 +48,7 @@ async def main():
             # Step 2: Map - Square the even numbers
             TransformConfig(
                 type="map",
+                label="Carré",
                 input_channels="filtered.evens",
                 output_channel="mapped.squared",
                 params={
@@ -55,6 +58,7 @@ async def main():
             # Step 3: Aggregate - Sum every 5 squared values
             TransformConfig(
                 type="aggregate",
+                label="Somme par 5",
                 input_channels="mapped.squared",
                 output_channel="aggregated.sums",
                 params={
@@ -68,30 +72,35 @@ async def main():
             # Show raw data
             DestinationConfig(
                 type="console",
+                label="Log brut",
                 channel_pattern="raw.data",
                 params={},
             ),
             # Show filtered data
             DestinationConfig(
                 type="console",
+                label="Log filtrés",
                 channel_pattern="filtered.evens",
                 params={},
             ),
             # Show mapped data
             DestinationConfig(
                 type="console",
+                label="Log carrés",
                 channel_pattern="mapped.squared",
                 params={},
             ),
             # Show aggregated results
             DestinationConfig(
                 type="console",
+                label="Log agrégats",
                 channel_pattern="aggregated.sums",
                 params={},
             ),
             # Collect final results for verification
             DestinationConfig(
                 type="inmemory",
+                label="Collecteur résultats",
                 channel_pattern="aggregated.sums",
                 params={},
             ),

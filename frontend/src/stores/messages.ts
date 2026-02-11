@@ -4,6 +4,8 @@ import { ref, computed } from 'vue'
 export interface StoredMessage {
   channel: string
   key: string | null
+  value_preview: string
+  tags: Record<string, string>
   subscriber_count: number
   timestamp: string
 }
@@ -21,6 +23,7 @@ export const useMessagesStore = defineStore('messages', () => {
   })
 
   function addMessage(msg: StoredMessage) {
+    if (msg.channel.startsWith('_metrics.')) return
     messages.value.push(msg)
     if (messages.value.length > maxMessages) {
       messages.value = messages.value.slice(-maxMessages)

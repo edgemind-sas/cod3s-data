@@ -75,11 +75,17 @@ class ObservatoryBridge:
             if not self._sampler.should_process(channel):
                 return
 
+            value = getattr(message, "value", None)
+            value_preview = repr(value)
+            if len(value_preview) > 120:
+                value_preview = value_preview[:120] + "..."
             event = ObservatoryEvent(
                 type=EventType.MESSAGE,
                 data={
                     "channel": channel,
                     "key": getattr(message, "key", None),
+                    "value_preview": value_preview,
+                    "tags": dict(getattr(message, "tags", {})),
                     "subscriber_count": subscriber_count,
                 },
             )
@@ -97,6 +103,16 @@ class ObservatoryBridge:
     ) -> None:
         """Called when a pipeline component changes state."""
         try:
+            label = ""
+            if self._framework is not None:
+                for comp in (
+                    list(self._framework.sources)
+                    + list(self._framework.transformations)
+                    + list(self._framework.destinations)
+                ):
+                    if getattr(comp, "_component_id", None) == component_id:
+                        label = getattr(comp, "_label", "")
+                        break
             event = ObservatoryEvent(
                 type=EventType.COMPONENT_STATE,
                 data={
@@ -104,6 +120,7 @@ class ObservatoryBridge:
                     "component_type": component_type,
                     "old_state": old_state,
                     "new_state": new_state,
+                    "label": label,
                 },
             )
             self._buffer.push(event)
@@ -221,6 +238,7 @@ class ObservatoryBridge:
                 "component_id": source._component_id,
                 "component_type": "source",
                 "state": state,
+                "label": source._label,
             })
         for tfm in self._framework.transformations:
             state = "running" if tfm._running else "created"
@@ -228,6 +246,7 @@ class ObservatoryBridge:
                 "component_id": tfm._component_id,
                 "component_type": "transformation",
                 "state": state,
+                "label": tfm._label,
             })
         for dest in self._framework.destinations:
             state = "running" if dest._running else "created"
@@ -235,6 +254,7 @@ class ObservatoryBridge:
                 "component_id": dest._component_id,
                 "component_type": "destination",
                 "state": state,
+                "label": dest._label,
             })
         return components
 
@@ -253,6 +273,7 @@ class ObservatoryBridge:
                 "component_id": source._component_id,
                 "component_type": "source",
                 "state": state,
+                "label": source._label,
                 "channels": {
                     "publishes": [source.channel],
                     "subscribes": [],
@@ -266,6 +287,7 @@ class ObservatoryBridge:
                 "component_id": tfm._component_id,
                 "component_type": "transformation",
                 "state": state,
+                "label": tfm._label,
                 "channels": {
                     "publishes": [tfm.output_channel],
                     "subscribes": list(tfm.input_channels),
@@ -281,6 +303,7 @@ class ObservatoryBridge:
                 "component_id": dest._component_id,
                 "component_type": "destination",
                 "state": state,
+                "label": dest._label,
                 "channels": {
                     "publishes": [],
                     "subscribes": [dest.channel_pattern],

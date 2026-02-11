@@ -31,8 +31,9 @@
             <Handle type="target" :position="Position.Left" />
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="blue">mdi-database-arrow-right</v-icon>
-              <span class="pipeline-node__label">{{ data.nodeId }}</span>
+              <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
             </div>
+            <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
@@ -52,8 +53,9 @@
             <Handle type="target" :position="Position.Left" />
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="orange">mdi-cog</v-icon>
-              <span class="pipeline-node__label">{{ data.nodeId }}</span>
+              <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
             </div>
+            <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
@@ -76,8 +78,9 @@
             <Handle type="target" :position="Position.Left" />
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="green">mdi-database-arrow-left</v-icon>
-              <span class="pipeline-node__label">{{ data.nodeId }}</span>
+              <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
             </div>
+            <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
@@ -117,6 +120,7 @@ const flowNodes = computed<FlowNode[]>(() =>
     targetPosition: Position.Left,
     data: {
       nodeId: node.id,
+      label: node.label,
       state: node.state,
       channels: node.channels,
     },
@@ -312,6 +316,12 @@ function stateColor(state: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pipeline-node__id {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 1px;
 }
 
 .pipeline-node__channel {
