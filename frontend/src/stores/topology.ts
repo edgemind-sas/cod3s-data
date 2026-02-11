@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import type { TopologyNode, TopologyEdge } from '@/types'
 
 export const useTopologyStore = defineStore('topology', () => {
@@ -10,7 +10,82 @@ export const useTopologyStore = defineStore('topology', () => {
   const transformations = computed(() => nodes.value.filter(n => n.type === 'transformation'))
   const destinations = computed(() => nodes.value.filter(n => n.type === 'destination'))
 
+  // --- Channel rate tracking (2-layer: non-reactive counters + reactive rates) ---
+  const channelRates = reactive<Record<string, number>>({})
+  const _channelCounters: Record<string, { count: number; lastTick: number }> = {}
+  const _channelTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+  const ACTIVITY_TIMEOUT_MS = 3000
+  const RATE_TICK_MS = 500
+  const EMA_ALPHA = 0.5
+  let _rateInterval: ReturnType<typeof setInterval> | null = null
+
+  function _startTicker() {
+    if (_rateInterval) return
+    _rateInterval = setInterval(() => {
+      const now = Date.now()
+      let anyActive = false
+      for (const ch of Object.keys(_channelCounters)) {
+        const counter = _channelCounters[ch]
+        const elapsed = (now - counter.lastTick) / 1000
+        if (elapsed <= 0) continue
+        const instantRate = counter.count / elapsed
+        const prev = channelRates[ch] ?? 0
+        channelRates[ch] = EMA_ALPHA * instantRate + (1 - EMA_ALPHA) * prev
+        counter.count = 0
+        counter.lastTick = now
+        if (channelRates[ch] > 0.01) anyActive = true
+      }
+      if (!anyActive) _stopTicker()
+    }, RATE_TICK_MS)
+  }
+
+  function _stopTicker() {
+    if (_rateInterval) {
+      clearInterval(_rateInterval)
+      _rateInterval = null
+    }
+  }
+
+  function markChannelActive(channel: string) {
+    if (!_channelCounters[channel]) {
+      _channelCounters[channel] = { count: 0, lastTick: Date.now() }
+    }
+    _channelCounters[channel].count++
+    _startTicker()
+
+    // Reset inactivity timeout
+    if (_channelTimers[channel]) clearTimeout(_channelTimers[channel])
+    _channelTimers[channel] = setTimeout(() => {
+      channelRates[channel] = 0
+      delete _channelCounters[channel]
+      delete _channelTimers[channel]
+    }, ACTIVITY_TIMEOUT_MS)
+  }
+
+  function isChannelActive(channel: string): boolean {
+    return (channelRates[channel] ?? 0) > 0
+  }
+
+  function getChannelRate(channel: string): number {
+    return channelRates[channel] ?? 0
+  }
+
+  function _cleanupRateTracking() {
+    _stopTicker()
+    for (const ch of Object.keys(_channelTimers)) {
+      clearTimeout(_channelTimers[ch])
+      delete _channelTimers[ch]
+    }
+    for (const ch of Object.keys(_channelCounters)) {
+      delete _channelCounters[ch]
+    }
+    for (const ch of Object.keys(channelRates)) {
+      delete channelRates[ch]
+    }
+  }
+
   function setTopology(data: { nodes: any[]; edges: any[] }) {
+    _cleanupRateTracking()
     nodes.value = data.nodes.map(n => ({
       id: n.component_id,
       type: n.component_type as TopologyNode['type'],
@@ -59,5 +134,5 @@ export const useTopologyStore = defineStore('topology', () => {
     }
   }
 
-  return { nodes, edges, sources, transformations, destinations, setTopology, updateComponent, updateSubscription }
+  return { nodes, edges, sources, transformations, destinations, channelRates, markChannelActive, isChannelActive, getChannelRate, setTopology, updateComponent, updateSubscription }
 })

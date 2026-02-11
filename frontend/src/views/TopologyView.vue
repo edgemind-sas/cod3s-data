@@ -1,6 +1,12 @@
 <template>
   <div>
-    <h1 class="text-h5 mb-4">Pipeline Topology</h1>
+    <div class="d-flex align-center mb-4">
+      <h1 class="text-h5">Pipeline Topology</h1>
+      <v-spacer />
+      <v-btn v-if="topologyStore.nodes.length > 0" size="small" variant="outlined" prepend-icon="mdi-auto-fix" @click="resetLayout">
+        Reset layout
+      </v-btn>
+    </div>
 
     <v-card v-if="topologyStore.nodes.length === 0">
       <v-card-text class="text-center text-medium-emphasis">
@@ -14,13 +20,14 @@
       <VueFlow
         :nodes="layoutedNodes"
         :edges="styledEdges"
-        :nodes-draggable="false"
+        :nodes-draggable="true"
         :nodes-connectable="false"
         :pan-on-drag="true"
         :zoom-on-scroll="true"
         fit-view-on-init
         @node-click="onNodeClick"
         @pane-click="onPaneClick"
+        @nodes-change="onNodesChange"
       >
         <!-- Source node -->
         <template #node-source="{ data }">
@@ -28,7 +35,6 @@
             class="pipeline-node pipeline-node--source"
             :class="{ 'pipeline-node--selected': selectedNodeId === data.nodeId }"
           >
-            <Handle type="target" :position="Position.Left" />
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="blue">mdi-database-arrow-right</v-icon>
               <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
@@ -87,8 +93,10 @@
             <div v-for="ch in data.channels.subscribes" :key="ch" class="pipeline-node__channel">
               &larr; {{ ch }}
             </div>
-            <Handle type="source" :position="Position.Right" />
           </div>
+        </template>
+        <template #edge-animated="edgeProps">
+          <AnimatedEdge v-bind="edgeProps" />
         </template>
       </VueFlow>
     </div>
@@ -98,11 +106,13 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { VueFlow, Position, Handle, MarkerType } from '@vue-flow/core'
-import type { Node as FlowNode, Edge as FlowEdge, NodeMouseEvent } from '@vue-flow/core'
+import type { Node as FlowNode, Edge as FlowEdge, NodeMouseEvent, NodeChange } from '@vue-flow/core'
+import { applyNodeChanges } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import dagre from '@dagrejs/dagre'
 import { useTopologyStore } from '@/stores/topology'
+import AnimatedEdge from '@/components/edges/AnimatedEdge.vue'
 
 const NODE_WIDTH = 220
 const NODE_HEIGHT = 100
@@ -135,9 +145,14 @@ const flowEdges = computed<FlowEdge[]>(() =>
       id: `e-${e.source_id}-${e.target_id}-${i}`,
       source: e.source_id,
       target: e.target_id,
-      type: 'smoothstep',
+      type: 'animated',
       label: e.pattern,
       markerEnd: { type: MarkerType.ArrowClosed },
+      data: {
+        channel: e.channel,
+        active: topologyStore.isChannelActive(e.channel),
+        rate: topologyStore.getChannelRate(e.channel),
+      },
     }))
 )
 
@@ -168,20 +183,44 @@ function applyDagreLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
   })
 }
 
-// --- Layouted nodes (recomputed when topology changes) ---
+// --- Layouted nodes (recomputed when topology structure changes) ---
 const layoutedNodes = ref<FlowNode[]>([])
 
-watch(
-  [flowNodes, flowEdges],
-  ([nodes, edges]) => {
-    if (nodes.length > 0) {
-      layoutedNodes.value = applyDagreLayout(nodes, edges)
-    } else {
-      layoutedNodes.value = []
+// Structural key: only changes when node IDs or edge connections change
+const topologyKey = computed(() => {
+  const nodeIds = topologyStore.nodes.map(n => n.id).sort().join(',')
+  const edgeIds = topologyStore.edges.map(e => `${e.source_id}-${e.target_id}`).sort().join(',')
+  return `${nodeIds}|${edgeIds}`
+})
+
+// Re-layout only on structural changes (new/removed nodes or edges)
+watch(topologyKey, () => {
+  if (flowNodes.value.length > 0) {
+    layoutedNodes.value = applyDagreLayout(flowNodes.value, flowEdges.value)
+  } else {
+    layoutedNodes.value = []
+  }
+}, { immediate: true })
+
+// Update node data (state, label) without touching positions
+watch(flowNodes, (newNodes) => {
+  for (const newNode of newNodes) {
+    const existing = layoutedNodes.value.find(n => n.id === newNode.id)
+    if (existing) {
+      existing.data = newNode.data
     }
-  },
-  { immediate: true, deep: true }
-)
+  }
+}, { deep: true })
+
+function onNodesChange(changes: NodeChange[]) {
+  layoutedNodes.value = applyNodeChanges(changes, layoutedNodes.value as any)
+}
+
+function resetLayout() {
+  if (flowNodes.value.length > 0) {
+    layoutedNodes.value = applyDagreLayout(flowNodes.value, flowEdges.value)
+  }
+}
 
 // --- Click-to-highlight ---
 const styledEdges = computed<FlowEdge[]>(() => {
@@ -198,7 +237,6 @@ const styledEdges = computed<FlowEdge[]>(() => {
       // Incoming edge → blue
       return {
         ...edge,
-        animated: true,
         style: { stroke: '#42A5F5', strokeWidth: 3 },
         labelStyle: { fill: '#42A5F5', fontSize: '10px', fontWeight: 'bold' },
       }
@@ -207,7 +245,6 @@ const styledEdges = computed<FlowEdge[]>(() => {
       // Outgoing edge → orange
       return {
         ...edge,
-        animated: true,
         style: { stroke: '#FFA726', strokeWidth: 3 },
         labelStyle: { fill: '#FFA726', fontSize: '10px', fontWeight: 'bold' },
       }

@@ -133,6 +133,7 @@ export const useConnectionStore = defineStore('connection', () => {
           ...msg.payload as any,
           timestamp: msg.timestamp,
         })
+        topologyStore.markChannelActive((msg.payload as any).channel)
         break
 
       case 'metric.update':
