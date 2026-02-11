@@ -105,6 +105,11 @@ class PipelineConfig(BaseModel):
 
     This is the root configuration model.
     """
+    name: str = Field(default="cod3s_pipeline", description="Pipeline name")
+    plugins: list[str] = Field(
+        default_factory=list,
+        description="Plugin module paths to load before creating components"
+    )
     sources: list[SourceConfig] = Field(default_factory=list)
     transformations: list[TransformationConfig] = Field(default_factory=list)
     destinations: list[DestinationConfig] = Field(default_factory=list)
@@ -131,6 +136,10 @@ class PipelineConfig(BaseModel):
 
 ```yaml
 # pipeline.yaml
+
+# Plugins: custom component modules loaded before creating components
+plugins:
+  - my_package.custom_transforms
 
 broker:
   type: in_memory
@@ -450,6 +459,78 @@ services:
       - ./output:/output
     command: cod3s run /config/pipeline.yaml
 ```
+
+---
+
+## Plugin System
+
+### Plugin Convention
+
+A plugin is a Python module that exports a `register(factory: ComponentFactory) -> None` function.
+As a fallback for backwards compatibility, `register_all(factory)` is also accepted.
+
+### Plugin Loading
+
+```python
+# cod3s_data/plugins.py
+
+class PluginError(Exception):
+    """Error raised when a plugin fails to load or register."""
+
+def load_plugin(module_path: str, factory: ComponentFactory) -> None:
+    """
+    Load a single plugin module.
+
+    1. importlib.import_module(module_path)
+    2. Look for register(), fallback to register_all()
+    3. Call register(factory)
+    4. Wrap errors in PluginError
+    """
+
+def load_plugins(
+    module_paths: list[str],
+    factory: ComponentFactory,
+    *,
+    raise_on_error: bool = True,
+) -> list[str]:
+    """
+    Load multiple plugins in declaration order.
+
+    Returns list of successfully loaded module paths.
+    """
+```
+
+### Framework Integration
+
+The `Framework` class loads plugins at the beginning of `start()`, before creating components:
+
+```python
+class Framework:
+    def __init__(self, config: PipelineConfig, plugins: list[str] | None = None):
+        self._extra_plugins = plugins or []
+        ...
+
+    def _load_plugins(self) -> list[str]:
+        """Merge config.plugins + extra_plugins (deduplicated), load in order."""
+        ...
+
+    async def start(self):
+        self._load_plugins()  # Before component creation
+        await self.broker.start()
+        # Create components from config...
+```
+
+### CLI Integration
+
+Both `run` and `validate` subcommands accept `-p/--plugin MODULE` (repeatable):
+
+```bash
+cod3s-data run pipeline.yaml -p my_package.custom_transforms
+cod3s-data validate pipeline.yaml --plugin my_package.custom_transforms
+```
+
+CLI plugins are merged with YAML `plugins:` list (without duplication).
+The `validate` command loads plugins and verifies that all referenced component types exist in the factory registries.
 
 ---
 

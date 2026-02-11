@@ -17,8 +17,13 @@ async def run_pipeline():
         await framework.run()
 ```
 
+**Constructor:**
+- `Framework(config, plugins=None)` - Create framework
+  - `config: PipelineConfig` - Pipeline configuration
+  - `plugins: list[str] | None` - Extra plugin module paths (merged with `config.plugins`)
+
 **Methods:**
-- `async start()` - Start the pipeline (broker, destinations, transformations, sources)
+- `async start()` - Load plugins, then start the pipeline (broker, destinations, transformations, sources)
 - `async run()` - Run until completion or stopped
 - `async stop()` - Graceful shutdown
 - `is_running: bool` - Check if framework is running
@@ -328,6 +333,7 @@ from cod3s_data.config import (
 
 config = PipelineConfig(
     name="my_pipeline",
+    plugins=["my_package.my_plugin"],  # Optional plugin modules to load
     broker=BrokerConfig(
         enable_metrics=True,
         history_size=100
@@ -363,6 +369,73 @@ config = PipelineConfig(
 from cod3s_data.config.loaders import load_yaml
 
 config = load_yaml("pipeline.yaml")
+```
+
+## Plugins
+
+The plugin system allows loading custom components (sources, transformations, destinations) from external modules.
+
+### PluginError
+
+```python
+from cod3s_data import PluginError
+```
+
+Exception raised when a plugin fails to load or register.
+
+### load_plugin
+
+```python
+from cod3s_data.plugins import load_plugin
+
+load_plugin("my_package.my_plugin", factory)
+```
+
+Load a single plugin module and call its `register(factory)` function.
+Falls back to `register_all(factory)` if `register` is not found.
+
+**Raises:** `PluginError` if the module cannot be imported, has no register function, or the register function fails.
+
+### load_plugins
+
+```python
+from cod3s_data.plugins import load_plugins
+
+loaded = load_plugins(["plugin_a", "plugin_b"], factory, raise_on_error=True)
+```
+
+Load multiple plugins in declaration order.
+
+**Parameters:**
+- `module_paths: list[str]` - Dotted module paths to load
+- `factory: ComponentFactory` - Factory to register components into
+- `raise_on_error: bool = True` - If False, skip failed plugins and continue
+
+**Returns:** List of successfully loaded module paths.
+
+### Writing a Plugin
+
+A plugin module must export a `register(factory)` function (or `register_all` as fallback):
+
+```python
+# my_plugin.py
+from cod3s_data.config.factory import ComponentFactory
+from cod3s_data.sources.base import Source
+
+class MySource(Source):
+    async def start(self):
+        ...
+
+def register(factory: ComponentFactory) -> None:
+    factory.register_source("my_source", MySource)
+```
+
+### ComponentFactory Introspection
+
+```python
+factory.registered_source_types         # -> set[str], e.g. {"random", "sequence", "csv", "file"}
+factory.registered_transformation_types # -> set[str], e.g. {"filter", "map", "aggregate"}
+factory.registered_destination_types    # -> set[str], e.g. {"console", "file", "inmemory", "collect"}
 ```
 
 ## Observability

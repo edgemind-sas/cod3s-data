@@ -1,12 +1,14 @@
 """Unit tests for framework."""
 
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cod3s_data.config import DestinationConfig, PipelineConfig, SourceConfig, TransformConfig
 from cod3s_data.core.component import ComponentState
 from cod3s_data.framework import Framework
+from cod3s_data.plugins import PluginError
 
 
 class TestFramework:
@@ -195,6 +197,68 @@ class TestFramework:
 
         assert framework.broker.enable_metrics is False
         assert framework.broker.default_history_size == 50
+
+
+class TestFrameworkPlugins:
+    @pytest.mark.asyncio
+    async def test_framework_loads_config_plugins(self):
+        """Framework loads plugins listed in config.plugins on start()."""
+        register_fn = MagicMock()
+
+        config = PipelineConfig(
+            plugins=["my.plugin"],
+            sources=[],
+            destinations=[],
+        )
+        framework = Framework(config)
+
+        with patch("cod3s_data.framework.load_plugins", return_value=["my.plugin"]) as mock_load:
+            await framework.start()
+            mock_load.assert_called_once_with(["my.plugin"], framework.factory)
+
+        await framework.stop()
+
+    @pytest.mark.asyncio
+    async def test_framework_loads_constructor_plugins(self):
+        """Framework loads plugins passed via constructor arg."""
+        config = PipelineConfig(sources=[], destinations=[])
+        framework = Framework(config, plugins=["extra.plugin"])
+
+        with patch("cod3s_data.framework.load_plugins", return_value=["extra.plugin"]) as mock_load:
+            await framework.start()
+            mock_load.assert_called_once_with(["extra.plugin"], framework.factory)
+
+        await framework.stop()
+
+    @pytest.mark.asyncio
+    async def test_framework_merges_config_and_constructor_plugins(self):
+        """Framework merges config.plugins and constructor plugins without duplication."""
+        config = PipelineConfig(
+            plugins=["plugin.a"],
+            sources=[],
+            destinations=[],
+        )
+        framework = Framework(config, plugins=["plugin.b", "plugin.a"])
+
+        with patch("cod3s_data.framework.load_plugins", return_value=["plugin.a", "plugin.b"]) as mock_load:
+            await framework.start()
+            # plugin.a from config, plugin.b from extra (plugin.a not duplicated)
+            mock_load.assert_called_once_with(["plugin.a", "plugin.b"], framework.factory)
+
+        await framework.stop()
+
+    @pytest.mark.asyncio
+    async def test_framework_invalid_plugin_raises_on_start(self):
+        """Framework with invalid plugin raises PluginError at start()."""
+        config = PipelineConfig(
+            plugins=["nonexistent.plugin"],
+            sources=[],
+            destinations=[],
+        )
+        framework = Framework(config)
+
+        with pytest.raises(PluginError):
+            await framework.start()
 
 
 class TestComponentState:

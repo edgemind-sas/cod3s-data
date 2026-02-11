@@ -20,7 +20,8 @@
 3. [Transformations](#transformations)
 4. [Destinations](#destinations)
 5. [Configuration](#configuration)
-6. [Testing Utilities](#testing-utilities)
+6. [Plugins](#plugins)
+7. [Testing Utilities](#testing-utilities)
 
 ---
 
@@ -36,12 +37,13 @@ class Framework:
     Manages broker, sources, transformations, and destinations.
     """
 
-    def __init__(self, debug: bool = False):
+    def __init__(self, config: PipelineConfig, plugins: list[str] | None = None):
         """
         Initialize framework.
 
         Args:
-            debug: Enable debug mode (verbose logging, tracing)
+            config: Pipeline configuration
+            plugins: Extra plugin module paths (merged with config.plugins)
         """
 
     @classmethod
@@ -474,10 +476,83 @@ class PipelineConfig(BaseModel):
     Validated by Pydantic.
     """
 
+    name: str = Field(default="cod3s_pipeline")
+    plugins: list[str] = Field(default_factory=list)
     sources: list[SourceConfig]
     transformations: list[TransformationConfig]
     destinations: list[DestinationConfig]
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
+```
+
+---
+
+## Plugins
+
+### PluginError
+
+```python
+from cod3s_data.plugins import PluginError
+
+class PluginError(Exception):
+    """Error raised when a plugin fails to load or register."""
+```
+
+### load_plugin
+
+```python
+def load_plugin(module_path: str, factory: ComponentFactory) -> None:
+    """
+    Load a single plugin module and call its register function.
+
+    Convention: module must export register(factory) or register_all(factory).
+    register() takes priority when both exist.
+
+    Args:
+        module_path: Dotted Python module path (e.g. "my_package.my_plugin")
+        factory: ComponentFactory to register components into
+
+    Raises:
+        PluginError: If import fails, no register function, or register raises
+    """
+```
+
+### load_plugins
+
+```python
+def load_plugins(
+    module_paths: list[str],
+    factory: ComponentFactory,
+    *,
+    raise_on_error: bool = True,
+) -> list[str]:
+    """
+    Load multiple plugins in declaration order.
+
+    Args:
+        module_paths: Dotted module paths to load
+        factory: ComponentFactory to register components into
+        raise_on_error: If False, skip failed plugins and continue
+
+    Returns:
+        List of successfully loaded module paths
+    """
+```
+
+### ComponentFactory Introspection
+
+```python
+class ComponentFactory:
+    @property
+    def registered_source_types(self) -> set[str]:
+        """Return registered source type names."""
+
+    @property
+    def registered_transformation_types(self) -> set[str]:
+        """Return registered transformation type names."""
+
+    @property
+    def registered_destination_types(self) -> set[str]:
+        """Return registered destination type names."""
 ```
 
 ---

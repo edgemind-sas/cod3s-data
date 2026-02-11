@@ -72,6 +72,7 @@ graph LR
 ### Configuration Scope
 
 **What can be configured:**
+- Plugins (custom component modules to load)
 - Sources (type, channels, batch mode, delivery guarantee)
 - Transformations (type, inputs, outputs, parameters)
 - Destinations (type, channels, buffering, retry)
@@ -91,6 +92,11 @@ graph LR
 
 ```yaml
 # pipeline.yaml - Full pipeline configuration
+
+# Plugins (optional) - Custom component modules to load before creating components
+plugins:
+  - my_package.custom_sources
+  - my_package.custom_transforms
 
 # Broker settings (optional)
 broker:
@@ -409,26 +415,52 @@ framework.remove_destination(console_dest)
 
 ---
 
-### Custom Components
+### Custom Components via Plugins
+
+**Plugin Convention:** A plugin is a Python module exporting a `register(factory)` function:
 
 ```python
-# Import custom transformation
-from myapp.transforms import ViscosityComputer
+# myapp/transforms.py
+from cod3s_data.config.factory import ComponentFactory
+from cod3s_data.transformations.base import StatefulTransform
 
-# Register with framework
-framework.register_transformation("viscosity", ViscosityComputer)
+class ViscosityComputer(StatefulTransform):
+    ...
 
-# Use in configuration
-viscosity_transform = ViscosityComputer(
-    input_channels=[
-        "sensors.temp",
-        "sensors.speed",
-        "sensors.force"
-    ],
-    output_channel="indicators.viscosity",
-    calibration_factor=1.2
+def register(factory: ComponentFactory) -> None:
+    factory.register_transformation("viscosity", ViscosityComputer)
+```
+
+**YAML Usage:**
+```yaml
+plugins:
+  - myapp.transforms
+
+transformations:
+  - type: viscosity       # Registered by the plugin
+    input_channels: [sensors.temp, sensors.speed, sensors.force]
+    output_channel: indicators.viscosity
+    params:
+      calibration_factor: 1.2
+```
+
+**CLI Usage:**
+```bash
+cod3s-data run pipeline.yaml --plugin myapp.transforms
+```
+
+**Programmatic Usage:**
+```python
+from cod3s_data.config import PipelineConfig
+from cod3s_data.framework import Framework
+
+config = PipelineConfig(
+    plugins=["myapp.transforms"],
+    ...
 )
-framework.add_transformation(viscosity_transform)
+
+# Or pass plugins at framework level
+framework = Framework(config, plugins=["myapp.transforms"])
 ```
 
 ---
@@ -638,10 +670,15 @@ except ConfigurationError as e:
 
 ### Validation Rules
 
+**Plugin validation:**
+- Plugin module can be imported
+- Plugin has a `register` or `register_all` callable
+- Plugin `register()` executes without errors
+
 **Type validation:**
-- Source type exists and is registered
-- Transformation type exists
-- Destination type exists
+- Source type exists and is registered (including plugin-provided types)
+- Transformation type exists (including plugin-provided types)
+- Destination type exists (including plugin-provided types)
 
 **Required fields:**
 - Sources must have: `type`, `channel`
@@ -667,14 +704,19 @@ except ConfigurationError as e:
 
 ```bash
 # Validate YAML file
-cod3s-data validate --config pipeline.yaml
+cod3s-data validate pipeline.yaml
+
+# Validate with plugins (verifies custom types are registered)
+cod3s-data validate pipeline.yaml --plugin my_package.custom_transforms
 
 # Output:
 # ✓ Configuration valid
-# - 2 sources configured
-# - 3 transformations configured
-# - 2 destinations configured
-# - No errors found
+#
+# Pipeline: my_pipeline
+#   Plugins: 1
+#   Sources: 2
+#   Transformations: 3
+#   Destinations: 2
 
 # Or if errors:
 # ✗ Configuration invalid

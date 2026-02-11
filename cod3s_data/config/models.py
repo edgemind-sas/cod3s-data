@@ -41,6 +41,10 @@ class PipelineConfig(BaseModel):
     """Top-level pipeline configuration."""
 
     name: str = Field(default="cod3s_pipeline", description="Pipeline name")
+    plugins: list[str] = Field(
+        default_factory=list,
+        description="Plugin module paths to load before creating components",
+    )
     broker: BrokerConfig = Field(default_factory=BrokerConfig, description="Broker configuration")
     sources: list[SourceConfig] = Field(default_factory=list, description="Source components")
     transformations: list[TransformConfig] = Field(

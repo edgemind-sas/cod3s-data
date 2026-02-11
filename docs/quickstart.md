@@ -142,6 +142,95 @@ Destinations consume messages:
 - **file**: Write to files
 - **inmemory**: Store in memory (for testing)
 
+## Using Plugins
+
+Plugins let you add custom components (sources, transformations, destinations) that integrate seamlessly with YAML configuration and the CLI.
+
+### Creating a Plugin
+
+A plugin is a Python module that exports a `register(factory)` function:
+
+```python
+# my_plugins.py
+from cod3s_data.config.factory import ComponentFactory
+from cod3s_data.transformations.base import StatefulTransform
+from cod3s_data.core.message import Message
+
+class MyCustomTransform(StatefulTransform):
+    async def transform_with_state(self, msg: Message, state: dict) -> Message | None:
+        # Your custom logic here
+        return msg.with_value(msg.value * 2)
+
+def register(factory: ComponentFactory) -> None:
+    factory.register_transformation("my_custom", MyCustomTransform)
+```
+
+### Using Plugins in YAML
+
+Declare plugins at the top of your pipeline configuration:
+
+```yaml
+name: my_pipeline_with_plugins
+
+plugins:
+  - my_plugins
+
+sources:
+  - type: sequence
+    channel: input
+    params:
+      start_value: 1
+      end_value: 11
+      rate: 2.0
+
+transformations:
+  - type: my_custom       # Type registered by the plugin
+    input_channels: input
+    output_channel: output
+    params: {}
+
+destinations:
+  - type: console
+    channel_pattern: output
+    params: {}
+```
+
+### Using Plugins via CLI
+
+You can also load plugins with the `--plugin` / `-p` flag:
+
+```bash
+# Load a plugin at runtime
+cod3s-data run my_pipeline.yaml --plugin my_plugins
+
+# Multiple plugins
+cod3s-data run my_pipeline.yaml -p my_plugins -p another_plugin
+
+# Validate with plugins (checks that custom types are registered)
+cod3s-data validate my_pipeline.yaml --plugin my_plugins
+```
+
+### Programmatic Plugin Loading
+
+```python
+from cod3s_data.config import PipelineConfig
+from cod3s_data.framework import Framework
+
+config = PipelineConfig(
+    plugins=["my_plugins"],
+    sources=[...],
+    destinations=[...],
+)
+
+# Plugins are loaded automatically when the Framework starts
+async with Framework(config) as framework:
+    await framework.run()
+
+# Or pass extra plugins via the constructor
+async with Framework(config, plugins=["another_plugin"]) as framework:
+    await framework.run()
+```
+
 ## Common Patterns
 
 ### Multi-Sensor Monitoring
@@ -220,6 +309,7 @@ cod3s-data run [OPTIONS] CONFIG_FILE
 Options:
   --log-level LEVEL     Logging level (DEBUG, INFO, WARNING, ERROR)
   --json-logs           Output logs in JSON format
+  -p, --plugin MODULE   Plugin module path to load (repeatable)
   -v, --verbose         Show stack traces on error
 ```
 
@@ -229,6 +319,7 @@ Options:
 cod3s-data validate [OPTIONS] CONFIG_FILE
 
 Options:
+  -p, --plugin MODULE   Plugin module path to load (repeatable)
   -v, --verbose         Show stack traces on error
 ```
 

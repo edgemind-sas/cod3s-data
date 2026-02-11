@@ -97,6 +97,21 @@ class ComponentFactory:
         dest_class = self._destination_registry[config.type]
         return dest_class(self.broker, config.channel_pattern, **config.params)
 
+    @property
+    def registered_source_types(self) -> set[str]:
+        """Return the set of registered source type names."""
+        return set(self._source_registry.keys())
+
+    @property
+    def registered_transformation_types(self) -> set[str]:
+        """Return the set of registered transformation type names."""
+        return set(self._transform_registry.keys())
+
+    @property
+    def registered_destination_types(self) -> set[str]:
+        """Return the set of registered destination type names."""
+        return set(self._destination_registry.keys())
+
     def register_source(self, name: str, source_class: Callable[..., Source]) -> None:
         """Register custom source type."""
         self._source_registry[name] = source_class

@@ -1,8 +1,9 @@
 """Unit tests for CLI module."""
 
 import argparse
+import types
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -51,7 +52,7 @@ class TestValidateCommand:
             "    channel_pattern: numbers\n"
             "    params: {}\n"
         )
-        args = argparse.Namespace(config=str(config_file), verbose=False)
+        args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
         result = validate_pipeline(args)
         assert result == 0
         captured = capsys.readouterr()
@@ -62,7 +63,7 @@ class TestValidateCommand:
 
     def test_validate_missing_file(self, capsys):
         """validate on non-existent file returns 1."""
-        args = argparse.Namespace(config="/nonexistent/path.yaml", verbose=False)
+        args = argparse.Namespace(config="/nonexistent/path.yaml", verbose=False, plugin=None)
         result = validate_pipeline(args)
         assert result == 1
         captured = capsys.readouterr()
@@ -72,7 +73,7 @@ class TestValidateCommand:
         """validate on invalid YAML returns 1."""
         config_file = tmp_path / "invalid.yaml"
         config_file.write_text("sources:\n  - type: sequence\n    # missing channel\n")
-        args = argparse.Namespace(config=str(config_file), verbose=False)
+        args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
         result = validate_pipeline(args)
         assert result == 1
         captured = capsys.readouterr()
@@ -82,7 +83,7 @@ class TestValidateCommand:
         """validate on empty YAML returns 1."""
         config_file = tmp_path / "empty.yaml"
         config_file.write_text("")
-        args = argparse.Namespace(config=str(config_file), verbose=False)
+        args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
         result = validate_pipeline(args)
         assert result == 1
         captured = capsys.readouterr()
@@ -92,7 +93,7 @@ class TestValidateCommand:
         """validate --verbose shows traceback on error."""
         config_file = tmp_path / "invalid.yaml"
         config_file.write_text("sources:\n  - type: sequence\n")
-        args = argparse.Namespace(config=str(config_file), verbose=True)
+        args = argparse.Namespace(config=str(config_file), verbose=True, plugin=None)
         result = validate_pipeline(args)
         assert result == 1
         captured = capsys.readouterr()
@@ -121,11 +122,52 @@ class TestValidateCommand:
             "    channel_pattern: output\n"
             "    params: {}\n"
         )
-        args = argparse.Namespace(config=str(config_file), verbose=False)
+        args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
         result = validate_pipeline(args)
         assert result == 0
         captured = capsys.readouterr()
         assert "Transformations: 1" in captured.out
+
+    def test_validate_with_yaml_plugin(self, tmp_path, capsys):
+        """validate with plugin in YAML shows Plugins count."""
+        config_file = tmp_path / "with_plugin.yaml"
+        config_file.write_text(
+            "name: plugin_test\n"
+            "plugins:\n"
+            "  - my.fake.plugin\n"
+            "sources:\n"
+            "  - type: sequence\n"
+            "    channel: ch\n"
+            "    params:\n"
+            "      start_value: 0\n"
+            "      end_value: 1\n"
+            "      rate: 10.0\n"
+            "destinations: []\n"
+        )
+        # Mock load_plugins to avoid real import
+        with patch("cod3s_data.plugins.load_plugin") as mock_load_plugin:
+            args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
+            result = validate_pipeline(args)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "Plugins: 1" in captured.out
+
+    def test_validate_with_invalid_plugin(self, tmp_path, capsys):
+        """validate with invalid plugin module returns error."""
+        config_file = tmp_path / "bad_plugin.yaml"
+        config_file.write_text(
+            "name: bad_plugin_test\n"
+            "plugins:\n"
+            "  - nonexistent.module.xyz\n"
+            "sources: []\n"
+            "destinations: []\n"
+        )
+        args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
+        result = validate_pipeline(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "invalid" in captured.err.lower() or "Error" in captured.err
 
 
 class TestRunCommand:
@@ -133,7 +175,7 @@ class TestRunCommand:
         """run on non-existent file returns 1."""
         args = argparse.Namespace(
             config="/nonexistent/path.yaml", verbose=False,
-            log_level="INFO", json_logs=False,
+            log_level="INFO", json_logs=False, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -161,7 +203,7 @@ class TestRunCommand:
         )
         args = argparse.Namespace(
             config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=False,
+            log_level="WARNING", json_logs=False, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
@@ -174,7 +216,7 @@ class TestRunCommand:
         config_file.write_text("sources:\n  - type: unknown_type\n    channel: x\n")
         args = argparse.Namespace(
             config=str(config_file), verbose=True,
-            log_level="WARNING", json_logs=False,
+            log_level="WARNING", json_logs=False, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -187,7 +229,7 @@ class TestRunCommand:
         config_file.write_text("sources:\n  - type: unknown_type\n    channel: x\n")
         args = argparse.Namespace(
             config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=False,
+            log_level="WARNING", json_logs=False, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -216,7 +258,7 @@ class TestRunCommand:
         )
         args = argparse.Namespace(
             config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=True,
+            log_level="WARNING", json_logs=True, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
@@ -242,10 +284,44 @@ class TestRunCommand:
         )
         args = argparse.Namespace(
             config=str(config_file), verbose=False,
-            log_level="DEBUG", json_logs=False,
+            log_level="DEBUG", json_logs=False, plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
+
+    def test_run_with_cli_plugin(self, tmp_path, capsys):
+        """run --plugin loads the plugin before starting the pipeline."""
+        config_file = tmp_path / "batch.yaml"
+        config_file.write_text(
+            "name: plugin_run_test\n"
+            "broker:\n"
+            "  enable_metrics: false\n"
+            "sources:\n"
+            "  - type: sequence\n"
+            "    channel: data\n"
+            "    params:\n"
+            "      start_value: 0\n"
+            "      end_value: 2\n"
+            "      rate: 10000.0\n"
+            "destinations:\n"
+            "  - type: inmemory\n"
+            "    channel_pattern: data\n"
+            "    params: {}\n"
+        )
+        # Create a fake plugin module
+        fake_plugin = types.ModuleType("fake_run_plugin")
+        fake_plugin.register = MagicMock()
+
+        with patch.dict("sys.modules", {"fake_run_plugin": fake_plugin}):
+            args = argparse.Namespace(
+                config=str(config_file), verbose=False,
+                log_level="WARNING", json_logs=False,
+                plugin=["fake_run_plugin"],
+            )
+            result = run_pipeline(args)
+
+        assert result == 0
+        fake_plugin.register.assert_called_once()
 
 
 class TestMainIntegration:

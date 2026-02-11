@@ -36,6 +36,12 @@ def run_pipeline(args: argparse.Namespace) -> int:
         print(f"Loading configuration from {config_path}")
         config = load_yaml(config_path)
 
+        # Merge CLI plugins into config
+        cli_plugins = args.plugin or []
+        for p in cli_plugins:
+            if p not in config.plugins:
+                config.plugins.append(p)
+
         # Run pipeline
         print(f"Starting pipeline: {config.name}")
 
@@ -81,9 +87,38 @@ def validate_pipeline(args: argparse.Namespace) -> int:
         print(f"Validating configuration: {config_path}")
         config = load_yaml(config_path)
 
+        # Merge CLI plugins into config
+        cli_plugins = args.plugin or []
+        for p in cli_plugins:
+            if p not in config.plugins:
+                config.plugins.append(p)
+
+        # Load plugins to validate types
+        all_plugins = config.plugins
+        if all_plugins:
+            from cod3s_data.broker.in_memory import InMemoryBroker
+            from cod3s_data.config.factory import ComponentFactory
+            from cod3s_data.plugins import load_plugins
+
+            broker = InMemoryBroker()
+            factory = ComponentFactory(broker)
+            load_plugins(all_plugins, factory)
+
+            # Verify all referenced types exist
+            for source in config.sources:
+                if source.type not in factory.registered_source_types:
+                    raise ValueError(f"Unknown source type '{source.type}'")
+            for transform in config.transformations:
+                if transform.type not in factory.registered_transformation_types:
+                    raise ValueError(f"Unknown transformation type '{transform.type}'")
+            for dest in config.destinations:
+                if dest.type not in factory.registered_destination_types:
+                    raise ValueError(f"Unknown destination type '{dest.type}'")
+
         # Print configuration summary
         print("\n✓ Configuration is valid!")
         print(f"\nPipeline: {config.name}")
+        print(f"  Plugins: {len(all_plugins)}")
         print(f"  Sources: {len(config.sources)}")
         for i, source in enumerate(config.sources, 1):
             print(f"    {i}. {source.type} -> {source.channel}")
@@ -151,6 +186,13 @@ def main() -> int:
         help="Output logs in JSON format (default: console format)",
     )
     run_parser.add_argument(
+        "-p",
+        "--plugin",
+        action="append",
+        default=None,
+        help="Plugin module path to load (repeatable)",
+    )
+    run_parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -166,6 +208,13 @@ def main() -> int:
     validate_parser.add_argument(
         "config",
         help="Path to pipeline configuration file (YAML)",
+    )
+    validate_parser.add_argument(
+        "-p",
+        "--plugin",
+        action="append",
+        default=None,
+        help="Plugin module path to load (repeatable)",
     )
     validate_parser.add_argument(
         "-v",

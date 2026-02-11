@@ -7,6 +7,7 @@ from cod3s_data.broker.in_memory import InMemoryBroker
 from cod3s_data.config.factory import ComponentFactory
 from cod3s_data.config.models import PipelineConfig
 from cod3s_data.destinations.base import Destination
+from cod3s_data.plugins import load_plugins
 from cod3s_data.sources.base import Source
 from cod3s_data.transformations.base import Transformation
 
@@ -14,13 +15,15 @@ from cod3s_data.transformations.base import Transformation
 class Framework:
     """Main framework coordinator for managing pipeline lifecycle."""
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(self, config: PipelineConfig, plugins: list[str] | None = None) -> None:
         """Initialize framework with configuration.
 
         Args:
             config: Pipeline configuration
+            plugins: Extra plugin module paths to load (merged with config.plugins)
         """
         self.config = config
+        self._extra_plugins = plugins or []
         self.broker = InMemoryBroker(
             enable_metrics=config.broker.enable_metrics,
             default_history_size=config.broker.history_size,
@@ -33,12 +36,28 @@ class Framework:
         self._source_tasks: list[asyncio.Task[Any]] = []
         self._running = False
 
+    def _load_plugins(self) -> list[str]:
+        """Load plugins from config and constructor argument.
+
+        Returns:
+            List of successfully loaded plugin module paths
+        """
+        all_plugins = list(self.config.plugins) + [
+            p for p in self._extra_plugins if p not in self.config.plugins
+        ]
+        if not all_plugins:
+            return []
+        return load_plugins(all_plugins, self.factory)
+
     async def start(self) -> None:
         """Start the pipeline."""
         if self._running:
             return
 
         self._running = True
+
+        # Load plugins before creating components
+        self._load_plugins()
 
         # Start broker
         await self.broker.start()
