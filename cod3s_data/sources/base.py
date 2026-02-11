@@ -1,13 +1,19 @@
 """Base class for data sources in COD3S Data Framework."""
 
+from __future__ import annotations
+
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
+
+import structlog
 
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
 from cod3s_data.core.message import Message
+
+_logger = structlog.get_logger()
 
 
 class BatchMode(Enum):
@@ -56,6 +62,10 @@ class Source(ABC):
         self._paused = False
         self._message_count = 0
 
+        # Observatory bridge (set by Framework when observatory is active)
+        self._bridge: Any = None
+        self._component_id: str = ""
+
     async def start(self) -> None:
         """
         Start producing messages.
@@ -63,6 +73,7 @@ class Source(ABC):
         Calls produce() and publishes each message to broker.
         """
         self._running = True
+        await self._notify_state_change("idle", "running")
 
         try:
             async for message in self.produce():
@@ -89,6 +100,7 @@ class Source(ABC):
     async def stop(self) -> None:
         """Stop producing messages."""
         self._running = False
+        await self._notify_state_change("running", "stopped")
         await self._on_stop()
 
     async def pause(self) -> None:
@@ -97,10 +109,12 @@ class Source(ABC):
             return
 
         self._paused = True
+        await self._notify_state_change("running", "paused")
 
     async def resume(self) -> None:
         """Resume message production."""
         self._paused = False
+        await self._notify_state_change("paused", "running")
 
     async def _publish_message(self, message: Message) -> None:
         """
@@ -144,6 +158,16 @@ class Source(ABC):
         """
         ...
         yield  # Make this a generator for type checking
+
+    async def _notify_state_change(self, old_state: str, new_state: str) -> None:
+        """Notify Observatory bridge of state change."""
+        if self._bridge is not None:
+            try:
+                await self._bridge.on_component_state_change(
+                    self._component_id, "source", old_state, new_state
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", error=str(e))
 
     async def _on_stop(self) -> None:
         """Subclass-specific cleanup (optional)."""

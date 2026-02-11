@@ -1,5 +1,7 @@
 """Configuration models for COD3S Data Framework."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -52,4 +54,7 @@ class PipelineConfig(BaseModel):
     )
     destinations: list[DestinationConfig] = Field(
         default_factory=list, description="Destination components"
+    )
+    observatory: dict[str, Any] | None = Field(
+        default=None, description="Observatory configuration (optional)"
     )

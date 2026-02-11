@@ -1,11 +1,17 @@
 """Base classes for transformations in COD3S Data Framework."""
 
+from __future__ import annotations
+
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
+import structlog
+
 from cod3s_data.broker.base import Broker, SubscriptionHandle
 from cod3s_data.core.message import Message
+
+_logger = structlog.get_logger()
 
 
 class Transformation(ABC):
@@ -23,12 +29,17 @@ class Transformation(ABC):
         self._running = False
         self._subscription_handles: list[SubscriptionHandle] = []
 
+        # Observatory bridge (set by Framework when observatory is active)
+        self._bridge: Any = None
+        self._component_id: str = ""
+
     async def start(self) -> None:
         """Start the transformation."""
         self._running = True
         for channel in self.input_channels:
             handle = self.broker.subscribe(channel, self._process_message)
             self._subscription_handles.append(handle)
+        await self._notify_state_change("idle", "running")
 
     async def stop(self) -> None:
         """Stop the transformation."""
@@ -36,6 +47,7 @@ class Transformation(ABC):
         for handle in self._subscription_handles:
             self.broker.unsubscribe(handle)
         self._subscription_handles.clear()
+        await self._notify_state_change("running", "stopped")
 
     async def _process_message(self, message: Message) -> None:
         """Process incoming message and publish results."""
@@ -51,6 +63,16 @@ class Transformation(ABC):
     async def transform(self, message: Message) -> Message | list[Message] | None:
         """Transform a message. Return message(s) or None to filter."""
         ...
+
+    async def _notify_state_change(self, old_state: str, new_state: str) -> None:
+        """Notify Observatory bridge of state change."""
+        if self._bridge is not None:
+            try:
+                await self._bridge.on_component_state_change(
+                    self._component_id, "transformation", old_state, new_state
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", error=str(e))
 
     @property
     def is_running(self) -> bool:

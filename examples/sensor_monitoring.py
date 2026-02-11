@@ -32,8 +32,8 @@ async def main():
                 params={
                     "rate": 10.0,  # 10 Hz
                     "max_messages": 100,  # Run for 10 seconds
-                    "value_min": 20.0,
-                    "value_max": 30.0,
+                    "min_value": 20.0,
+                    "max_value": 30.0,
                 },
             ),
             # Pressure sensor - generates random values around 1013 hPa
@@ -43,8 +43,8 @@ async def main():
                 params={
                     "rate": 10.0,  # 10 Hz
                     "max_messages": 100,
-                    "value_min": 1000.0,
-                    "value_max": 1030.0,
+                    "min_value": 1000.0,
+                    "max_value": 1030.0,
                 },
             ),
         ],

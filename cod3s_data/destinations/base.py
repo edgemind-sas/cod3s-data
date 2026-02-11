@@ -1,12 +1,19 @@
 """Base class for destinations in COD3S Data Framework."""
 
+from __future__ import annotations
+
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
+
+import structlog
 
 from cod3s_data.broker.base import Broker, SubscriptionHandle
 from cod3s_data.core.buffers import DestinationBuffer, OverflowStrategy
 from cod3s_data.core.message import Message
+
+_logger = structlog.get_logger()
 
 
 class RetryStrategy(Enum):
@@ -43,12 +50,17 @@ class Destination(ABC):
         self._message_count = 0
         self._error_count = 0
 
+        # Observatory bridge (set by Framework when observatory is active)
+        self._bridge: Any = None
+        self._component_id: str = ""
+
     async def start(self) -> None:
         self._running = True
         self._subscription_handle = self.broker.subscribe(
             self.channel_pattern, self._enqueue_message
         )
         self._writer_task = asyncio.create_task(self._writer_loop())
+        await self._notify_state_change("idle", "running")
 
     async def stop(self) -> None:
         self._running = False
@@ -58,6 +70,7 @@ class Destination(ABC):
             await self._writer_task
         await self._flush_buffer()
         await self.close()
+        await self._notify_state_change("running", "stopped")
 
     async def _enqueue_message(self, message: Message) -> None:
         await self.buffer.put(message)
@@ -129,6 +142,16 @@ class Destination(ABC):
     @abstractmethod
     async def write(self, message: Message) -> None:
         ...
+
+    async def _notify_state_change(self, old_state: str, new_state: str) -> None:
+        """Notify Observatory bridge of state change."""
+        if self._bridge is not None:
+            try:
+                await self._bridge.on_component_state_change(
+                    self._component_id, "destination", old_state, new_state
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", error=str(e))
 
     async def close(self) -> None:
         pass

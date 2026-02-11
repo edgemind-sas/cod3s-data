@@ -1,8 +1,13 @@
 """In-memory broker implementation for COD3S Data Framework."""
 
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
+
+import structlog
 
 from cod3s_data.broker.base import (
     Broker,
@@ -15,6 +20,8 @@ from cod3s_data.broker.exceptions import InvalidChannelError, InvalidPatternErro
 from cod3s_data.core.buffers import HistoryBuffer
 from cod3s_data.core.message import Message
 from cod3s_data.core.subscription_registry import Callback, SubscriptionRegistry
+
+_logger = structlog.get_logger()
 
 
 class InMemoryBroker(Broker):
@@ -55,6 +62,9 @@ class InMemoryBroker(Broker):
         """
         self._default_history_size = default_history_size
         self._enable_metrics = enable_metrics
+
+        # Observatory bridge (set by Framework when observatory is active)
+        self._bridge: Any = None
 
         # Subscription registry
         self._registry = SubscriptionRegistry()
@@ -129,6 +139,15 @@ class InMemoryBroker(Broker):
             asyncio.create_task(self._notify_subscriber(callback, message, channel))
 
         subscriber_count = len(callbacks)
+
+        # Observatory hook
+        if self._bridge is not None:
+            try:
+                await self._bridge.on_message_published(
+                    channel, message, subscriber_count
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", hook="on_message_published", error=str(e))
 
         # Update metrics
         self._publish_count += 1
@@ -220,6 +239,15 @@ class InMemoryBroker(Broker):
         # Register subscription
         self._registry.add_subscription(pattern, callback)
         self._subscriptions[handle.id] = handle
+
+        # Observatory hook
+        if self._bridge is not None:
+            try:
+                asyncio.create_task(
+                    self._bridge.on_subscription_change(pattern, "subscribe", handle.id)
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", hook="on_subscription_change", error=str(e))
 
         # Replay history if requested
         if history != HistoryMode.NONE:
@@ -314,6 +342,15 @@ class InMemoryBroker(Broker):
 
         # Remove from handles
         del self._subscriptions[handle.id]
+
+        # Observatory hook
+        if self._bridge is not None:
+            try:
+                asyncio.create_task(
+                    self._bridge.on_subscription_change(handle.pattern, "unsubscribe", handle.id)
+                )
+            except Exception as e:
+                _logger.warning("Observatory hook error", hook="on_subscription_change", error=str(e))
 
         # Emit metric
         if self._enable_metrics:

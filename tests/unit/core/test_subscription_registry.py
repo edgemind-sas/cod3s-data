@@ -345,6 +345,35 @@ class TestPerformance:
         assert len(callbacks) == 1
 
 
+class TestStaticMatches:
+    """Test the static matches() method."""
+
+    def test_exact_match(self):
+        assert SubscriptionRegistry.matches("sensors.temp", "sensors.temp") is True
+        assert SubscriptionRegistry.matches("sensors.temp", "sensors.pressure") is False
+
+    def test_single_wildcard(self):
+        assert SubscriptionRegistry.matches("sensors.*.temp", "sensors.printer1.temp") is True
+        assert SubscriptionRegistry.matches("sensors.*.temp", "sensors.temp") is False
+        assert SubscriptionRegistry.matches("sensors.*.temp", "sensors.a.b.temp") is False
+
+    def test_multi_wildcard_suffix(self):
+        assert SubscriptionRegistry.matches("sensors.**", "sensors.temp") is True
+        assert SubscriptionRegistry.matches("sensors.**", "sensors.a.b.c") is True
+        assert SubscriptionRegistry.matches("sensors.**", "alerts.temp") is False
+
+    def test_multi_wildcard_prefix(self):
+        assert SubscriptionRegistry.matches("**.temp", "temp") is True
+        assert SubscriptionRegistry.matches("**.temp", "sensors.temp") is True
+        assert SubscriptionRegistry.matches("**.temp", "a.b.temp") is True
+        assert SubscriptionRegistry.matches("**.temp", "sensors.pressure") is False
+
+    def test_multi_wildcard_middle(self):
+        assert SubscriptionRegistry.matches("sensors.**.temp", "sensors.temp") is True
+        assert SubscriptionRegistry.matches("sensors.**.temp", "sensors.a.temp") is True
+        assert SubscriptionRegistry.matches("sensors.**.temp", "sensors.a.b.temp") is True
+
+
 class TestEdgeCases:
     """Test edge cases."""
 

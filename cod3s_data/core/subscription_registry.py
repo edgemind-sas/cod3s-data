@@ -231,6 +231,25 @@ class SubscriptionRegistry:
 
         return re.compile(regex_pattern)
 
+    @staticmethod
+    def matches(pattern: str, channel: str) -> bool:
+        """Test if a channel matches a pattern.
+
+        Args:
+            pattern: Channel pattern (exact, single-wildcard *, or multi-wildcard **)
+            channel: Exact channel name
+
+        Returns:
+            True if the channel matches the pattern.
+        """
+        if "*" not in pattern:
+            return pattern == channel
+        if "**" in pattern:
+            regex = SubscriptionRegistry._compile_multi_wildcard(pattern)
+        else:
+            regex = SubscriptionRegistry._compile_single_wildcard(pattern)
+        return regex.fullmatch(channel) is not None
+
     def get_all_patterns(self) -> list[str]:
         """
         Get all registered patterns (for debugging).

@@ -42,11 +42,42 @@ def run_pipeline(args: argparse.Namespace) -> int:
             if p not in config.plugins:
                 config.plugins.append(p)
 
+        # Resolve Observatory setting
+        observatory_enabled = getattr(args, "observatory", False)
+        observatory_port = getattr(args, "observatory_port", None)
+        interactive = getattr(args, "interactive", False)
+
+        # --interactive implies --observatory
+        if interactive:
+            observatory_enabled = True
+
+        observatory: bool | object = observatory_enabled
+        if observatory_enabled:
+            try:
+                from cod3s_data.observatory.config import ObservatoryConfig
+
+                port = observatory_port or 8765
+                observatory = ObservatoryConfig(port=port, interactive=interactive)
+            except ImportError:
+                print(
+                    "Warning: Observatory dependencies not installed. "
+                    "Install with: pip install cod3s-data[observatory]",
+                    file=sys.stderr,
+                )
+                observatory = False
+
         # Run pipeline
-        print(f"Starting pipeline: {config.name}")
+        if interactive and observatory:
+            port_val = observatory_port or 8765
+            print(f"Starting pipeline: {config.name} (Interactive mode)")
+            print(f"Pipeline ready, open http://127.0.0.1:{port_val} to start")
+        elif observatory:
+            print(f"Starting pipeline: {config.name} (Observatory enabled)")
+        else:
+            print(f"Starting pipeline: {config.name}")
 
         async def run():
-            async with Framework(config) as framework:
+            async with Framework(config, observatory=observatory) as framework:
                 await framework.run()
 
         asyncio.run(run())
@@ -197,6 +228,22 @@ def main() -> int:
         "--verbose",
         action="store_true",
         help="Verbose output (show stack traces on error)",
+    )
+    run_parser.add_argument(
+        "--observatory",
+        action="store_true",
+        help="Enable Observatory web UI for debugging and monitoring",
+    )
+    run_parser.add_argument(
+        "--observatory-port",
+        type=int,
+        default=None,
+        help="Observatory server port (default: 8765)",
+    )
+    run_parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Start Observatory in interactive mode (pipeline waits for UI to start it)",
     )
     run_parser.set_defaults(func=run_pipeline)
 

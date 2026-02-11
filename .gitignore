@@ -62,6 +62,10 @@ site/
 !tests/fixtures/*.json
 !tests/fixtures/*.jsonl
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # Logs
 *.log
 
