@@ -115,7 +115,7 @@ This functional specification suite is organized into **feature-based documents*
 | **Backpressure** | Bounded buffers with configurable overflow strategies | [06-DESTINATIONS](06-DESTINATIONS.md#backpressure) |
 | **Channel Routing** | Hierarchical with wildcard subscriptions (`*`, `**`) | [07-CHANNELS-ROUTING](07-CHANNELS-ROUTING.md#wildcards) |
 | **Transformations** | Stateless (1:N) and Stateful (N:M multi-channel) | [05-TRANSFORMATIONS](05-TRANSFORMATIONS.md) |
-| **Time Handling** | Accept any timezone, normalize to UTC internally | [03-MESSAGES](03-MESSAGES.md#timezone) |
+| **Time Handling** | Require timezone-aware timestamps, reject naive, normalize to UTC | [03-MESSAGES](03-MESSAGES.md#timezone) |
 | **Configuration** | Triple approach: YAML + Python + Environment variables | [09-CONFIGURATION](09-CONFIGURATION.md) |
 | **Observability** | Metrics as messages on `_metrics.*` channels | [10-OBSERVABILITY](10-OBSERVABILITY.md) |
 | **Deployment** | Embedded library, standalone service, or CLI tool | [11-DEPLOYMENT](11-DEPLOYMENT.md) |
@@ -130,11 +130,13 @@ timeline
     title COD3S Data Framework Roadmap
 
     section V1.0 - Core Framework
-        In-Memory Broker : Sources (Test, File, CSV)
-                         : Transformations (Custom Python)
-                         : Destinations (Console, File, InMemory)
-                         : YAML Configuration
-                         : Basic Observability
+        In-Memory Broker : Sources (Random, Sequence, File, CSV)
+                         : Transformations (Filter, Map, Aggregate)
+                         : Destinations (Console, File, InMemory, Collect)
+                         : YAML Configuration + Plugin System
+                         : Observability (Metrics-as-Messages)
+                         : Observatory (Web UI for debugging)
+                         : CLI Tool
 
     section V2.0 - Integration
         Docker Support : External Databases (PostgreSQL, InfluxDB)
@@ -152,11 +154,15 @@ timeline
 ### Scope Boundaries
 
 **V1.0 - Current Focus** (This specification)
-- In-memory broker
-- Test sources (Random, Sequence, File, CSV)
-- Custom Python transformations
-- Basic destinations (Console, File, InMemory/Collect)
+- In-memory broker with channel patterns (`*`, `**`)
+- Sources: Random, Sequence, File (JSON/JSONL), CSV (Polars)
+- Transformations: Filter, Map, Aggregate (custom via plugin system)
+- Destinations: Console, File, InMemory, Collect (testing)
 - YAML + Python + Env configuration
+- Plugin system for extensibility
+- Observability: metrics-as-messages, structured logging (structlog)
+- **Observatory**: Web UI for real-time debugging and pipeline control
+- CLI tool (`cod3s-data run`, `cod3s-data validate`)
 - Embedded and standalone deployment
 - Performance targets: <50ms p99, 10K msg/s, <512MB RAM
 

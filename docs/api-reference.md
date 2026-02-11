@@ -18,9 +18,10 @@ async def run_pipeline():
 ```
 
 **Constructor:**
-- `Framework(config, plugins=None)` - Create framework
+- `Framework(config, plugins=None, observatory=False)` - Create framework
   - `config: PipelineConfig` - Pipeline configuration
   - `plugins: list[str] | None` - Extra plugin module paths (merged with `config.plugins`)
+  - `observatory: bool | ObservatoryConfig = False` - Enable Observatory web UI. Pass `True` for defaults, an `ObservatoryConfig` instance for custom settings, or `False` to disable.
 
 **Methods:**
 - `async start()` - Load plugins, then start the pipeline (broker, destinations, transformations, sources)
@@ -49,7 +50,7 @@ msg = Message(
 - `timestamp: datetime` - UTC timestamp (timezone-aware)
 - `value: Any` - Message payload
 - `tags: dict[str, str]` - Metadata tags
-- `id: str` - Unique message ID (auto-generated)
+- `id: UUID` - Unique message ID (auto-generated)
 
 **Methods:**
 - `with_value(new_value)` - Create new message with different value
@@ -137,16 +138,16 @@ source = RandomSource(
     broker=broker,
     channel="sensors.temp",
     rate=10.0,
-    value_min=20.0,
-    value_max=30.0,
+    min_value=20.0,
+    max_value=30.0,
     max_messages=1000  # Optional limit
 )
 ```
 
 **Parameters:**
 - `rate: float` - Messages per second
-- `value_min: float = 0.0` - Minimum value
-- `value_max: float = 100.0` - Maximum value
+- `min_value: float = 0.0` - Minimum value
+- `max_value: float = 100.0` - Maximum value
 - `max_messages: int | None = None` - Stop after N messages (BATCH mode)
 
 ### FileSource
@@ -159,14 +160,14 @@ from cod3s_data.sources.file_sources import FileSource
 source = FileSource(
     broker=broker,
     channel="file.data",
-    file_path="data.jsonl",
-    batch_mode="batch"  # or "transpose"
+    file_path="data.jsonl"
 )
 ```
 
 **Parameters:**
 - `file_path: str | Path` - Path to file
-- `batch_mode: str = "batch"` - "batch" or "transpose" (for timestamp-based replay)
+
+> FileSource always operates in BATCH mode.
 
 ### CSVSource
 
@@ -314,6 +315,56 @@ await dest.start()
 
 # Get messages
 messages = dest.get_all()
+```
+
+### CollectDestination
+
+Collect messages with assertion helpers for testing.
+
+```python
+from cod3s_data.destinations.collect import CollectDestination
+
+dest = CollectDestination(
+    broker=broker,
+    channel_pattern="test.**"
+)
+
+await dest.start()
+
+# Wait for messages
+await dest.wait_for_messages(count=10, timeout=5.0)
+
+# Assertions
+dest.assert_count(10)
+dest.assert_min_count(5)
+
+# Query
+all_msgs = dest.get_all()
+filtered = dest.filter_by(key="temperature", sensor="TH001")
+
+# Reset
+dest.clear()
+```
+
+**Methods:**
+- `get_all()` - Get all collected messages
+- `clear()` - Remove all collected messages
+- `assert_count(expected)` - Assert exact message count
+- `assert_min_count(minimum)` - Assert minimum message count
+- `filter_by(key=None, **tags)` - Filter messages by key and/or tags
+- `async wait_for_messages(count, timeout=5.0)` - Wait for N messages with timeout
+
+## Pipeline State
+
+```python
+from cod3s_data.framework import PipelineState
+
+# PipelineState enum values:
+# IDLE     - Pipeline created but not started
+# RUNNING  - Pipeline is active
+# STOPPING - Pipeline is shutting down
+# STOPPED  - Pipeline has stopped
+# ERROR    - Pipeline encountered an error
 ```
 
 ## Configuration
@@ -470,6 +521,67 @@ collector = MetricsCollector("source", tags={"source_id": "src-1"})
 collector.increment("messages_produced", 5)
 collector.set("queue_size", 42)
 await collector.flush()
+```
+
+## Buffer Helpers
+
+Utility structures for stateful transformations and aggregations.
+
+```python
+from cod3s_data.core.buffers import Latest, TimeWindow, CountWindow, Cache
+```
+
+### Latest
+
+Keep the latest message per channel. Useful for combining messages from multiple channels.
+
+```python
+latest = Latest()
+latest.update("sensors.temp", msg)
+latest.get("sensors.temp")       # -> Message | None
+latest.all()                     # -> dict[str, Message]
+latest.has_all(["sensors.temp", "sensors.pressure"])  # -> bool
+```
+
+### TimeWindow
+
+Time-based sliding window for aggregations over time.
+
+```python
+from datetime import timedelta
+
+window = TimeWindow(duration=timedelta(minutes=5))
+window.add(msg)
+window.all()      # -> list[Message] (within window)
+window.count()    # -> int
+window.values()   # -> list[Any] (extracted values)
+```
+
+### CountWindow
+
+Count-based sliding window for aggregations over N messages.
+
+```python
+window = CountWindow(max_count=10)
+window.add(msg)
+window.all()       # -> list[Message]
+window.count()     # -> int
+window.is_full()   # -> bool
+window.values()    # -> list[Any]
+```
+
+### Cache
+
+Key-value cache with optional TTL.
+
+```python
+from datetime import timedelta
+
+cache = Cache(ttl=timedelta(minutes=10))
+cache.set("key", value)
+cache.get("key")     # -> Any | None (None if expired)
+cache.has("key")     # -> bool
+cache.clear()
 ```
 
 ## Channel Patterns

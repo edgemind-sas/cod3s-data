@@ -67,6 +67,69 @@ graph TB
 
 ---
 
+## Observatory (Web UI)
+
+COD3S Data includes an **Observatory** module - a built-in web UI for real-time debugging and pipeline control. Observatory is implemented in V1.0 and can be enabled via CLI or configuration.
+
+**Features:**
+- Real-time pipeline visualization (sources, transformations, destinations)
+- Component state monitoring (idle, running, paused, completed, stopped)
+- Pipeline control (start, stop, restart) via WebSocket
+- Interactive mode (pipeline waits for UI to start it)
+- Message sampling and inspection
+
+**Enabling Observatory:**
+```bash
+# Via CLI
+cod3s-data run pipeline.yaml --observatory
+cod3s-data run pipeline.yaml --observatory --observatory-port 9000
+cod3s-data run pipeline.yaml --interactive  # implies --observatory
+
+# Via YAML configuration
+observatory:
+  enabled: true
+  port: 8765
+  interactive: false
+```
+
+**Environment Variables:**
+- `COD3S_OBSERVATORY_ENABLED` - Enable Observatory (`true`/`false`)
+- `COD3S_OBSERVATORY_HOST` - Server host (default: `127.0.0.1`)
+- `COD3S_OBSERVATORY_PORT` - Server port (default: `8765`)
+- `COD3S_OBSERVATORY_BUFFER_SIZE` - Event buffer size
+- `COD3S_OBSERVATORY_MEMORY_LIMIT_MB` - Memory limit
+- `COD3S_OBSERVATORY_DEBUG` - Enable debug mode
+- `COD3S_OBSERVATORY_SAMPLING_STRATEGY` - Sampling strategy
+- `COD3S_OBSERVATORY_SAMPLING_RATE` - Sampling rate
+
+**See also:** [API Reference - Framework constructor](../../api-reference.md) for programmatic usage.
+
+---
+
+## MetricsCollector
+
+The `MetricsCollector` class provides a helper for batching and emitting metrics:
+
+```python
+from cod3s_data.observability.metrics import MetricsCollector
+
+collector = MetricsCollector("source", tags={"source_id": "src-1"})
+collector.increment("messages_produced")
+collector.increment("messages_produced", 5)
+collector.set("queue_size", 42)
+await collector.flush()  # Emits all collected metrics and resets
+```
+
+**Methods:**
+- `increment(metric_name, value=1)` - Increment a counter
+- `set(metric_name, value)` - Set a gauge value
+- `async flush(extra_tags=None)` - Emit all metrics and reset
+- `reset()` - Reset without emitting
+
+**See also:** `emit_metric()` and `emit_metric_async()` for single metric emission.
+
+---
+
 ## Metrics as Messages
 
 ### Concept
@@ -558,8 +621,8 @@ logging:
 
 **Or environment variable:**
 ```bash
-export CODS_LOG_LEVEL=DEBUG
-export CODS_DEBUG_CHANNELS=true
+export COD3S_LOG_LEVEL=DEBUG
+export COD3S_DEBUG_CHANNELS=true
 ```
 
 ---

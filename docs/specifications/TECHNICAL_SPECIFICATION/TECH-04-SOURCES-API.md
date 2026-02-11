@@ -37,7 +37,7 @@ class BatchMode(Enum):
     """Source batch mode"""
     BATCH = "batch"          # Finite dataset, process once
     REALTIME = "realtime"    # Continuous operation
-    TRANSPOSE = "transpose"  # Timestamp-based replay
+    TRANSPOSE = "transpose"  # Timestamp-based replay — **Planned (V1.x)**
 
 class Source(ABC):
     """
@@ -56,8 +56,7 @@ class Source(ABC):
         self,
         broker: Broker,
         channel: str,
-        batch_mode: BatchMode = BatchMode.BATCH,
-        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE
+        batch_mode: BatchMode = BatchMode.BATCH
     ):
         """
         Initialize source.
@@ -65,13 +64,11 @@ class Source(ABC):
         Args:
             broker: Message broker for publishing
             channel: Target channel for messages
-            batch_mode: Operating mode (BATCH, REALTIME, TRANSPOSE)
-            delivery_guarantee: Message delivery guarantee
+            batch_mode: Operating mode (BATCH, REALTIME)
         """
         self.broker = broker
         self.channel = channel
         self.batch_mode = batch_mode
-        self.delivery_guarantee = delivery_guarantee
 
         self._running = False
         self._paused = False
@@ -138,14 +135,8 @@ class Source(ABC):
     async def _publish_message(self, message: Message):
         """
         Publish message to broker.
-
-        Handles delivery guarantees.
         """
-        await self.broker.publish(
-            self.channel,
-            message,
-            self.delivery_guarantee
-        )
+        await self.broker.publish(self.channel, message)
 
         # Emit progress metric
         if self._message_count % 100 == 0:
@@ -300,7 +291,9 @@ class RandomSource(Source):
             await asyncio.sleep(interval)
 ```
 
-### TRANSPOSE Mode Implementation
+### TRANSPOSE Mode Implementation — Planned (V1.x)
+
+> **Note**: TRANSPOSE mode and `TransposeCSVSource` are not yet implemented. The design below is aspirational for a future V1.x release.
 
 ```python
 class TransposeCSVSource(Source):
@@ -308,6 +301,8 @@ class TransposeCSVSource(Source):
     Replay CSV with timestamp-based delays (TRANSPOSE mode).
 
     Preserves original timestamps but adjusts replay speed.
+
+    Status: Planned (V1.x) — not yet implemented.
     """
 
     def __init__(
@@ -365,8 +360,9 @@ class SequenceSource(Source):
     Generate sequential integers (testing).
 
     Args:
-        start: Starting value (inclusive)
-        end: Ending value (exclusive)
+        start_value: Starting value (inclusive)
+        end_value: Ending value (exclusive)
+        step_value: Step between values
         rate: Messages per second (0 = unlimited)
     """
 
@@ -374,19 +370,21 @@ class SequenceSource(Source):
         self,
         broker: Broker,
         channel: str,
-        start: int = 0,
-        end: int = 100,
+        start_value: int = 0,
+        end_value: int = 100,
+        step_value: int = 1,
         rate: float = 10.0
     ):
         super().__init__(broker, channel, batch_mode=BatchMode.BATCH)
-        self.start = start
-        self.end = end
+        self.start_value = start_value
+        self.end_value = end_value
+        self.step_value = step_value
         self.rate = rate
 
     async def produce(self) -> AsyncIterator[Message]:
         interval = 1.0 / self.rate if self.rate > 0 else 0
 
-        for i in range(self.start, self.end):
+        for i in range(self.start_value, self.end_value, self.step_value):
             yield Message(
                 key="sequence",
                 timestamp=datetime.now(timezone.utc),

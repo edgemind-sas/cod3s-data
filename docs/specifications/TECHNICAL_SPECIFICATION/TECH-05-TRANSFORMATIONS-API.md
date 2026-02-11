@@ -16,26 +16,26 @@
 ## Table of Contents
 
 1. [Transformation Base Classes](#transformation-base-classes)
-2. [Stateless Transformations](#stateless-transformations)
-3. [Stateful Transformations](#stateful-transformations)
+2. [Built-in Stateless Transformations](#built-in-stateless-transformations)
+3. [Custom Stateful Transformation Examples](#custom-stateful-transformation-examples)
 4. [State Helpers](#state-helpers)
-5. [Built-in Transformations](#built-in-transformations)
+5. [Built-in Transformations Summary](#built-in-transformations-summary)
 
 ---
 
 ## Transformation Base Classes
 
-### Stateless Transformation (1:N)
+### Base Transformation (ABC)
 
 ```python
 from abc import ABC, abstractmethod
 
-class StatelessTransform(ABC):
+class Transformation(ABC):
     """
-    Stateless transformation: each input → 0+ outputs.
+    Base class for all transformations.
 
-    No state maintained between messages.
-    Simple, efficient, easy to test.
+    Each input message produces 0 or more output messages.
+    Subclasses implement transform() to define the transformation logic.
     """
 
     def __init__(
@@ -45,7 +45,7 @@ class StatelessTransform(ABC):
         output_channel: str
     ):
         """
-        Initialize stateless transformation.
+        Initialize transformation.
 
         Args:
             broker: Message broker
@@ -88,6 +88,12 @@ class StatelessTransform(ABC):
         try:
             results = await self.transform(message)
 
+            if results is None:
+                return  # Message filtered out
+
+            if isinstance(results, Message):
+                results = [results]
+
             for result in results:
                 await self.broker.publish(self.output_channel, result)
 
@@ -98,7 +104,7 @@ class StatelessTransform(ABC):
                             exc_info=True)
 
     @abstractmethod
-    async def transform(self, message: Message) -> list[Message]:
+    async def transform(self, message: Message) -> Message | list[Message] | None:
         """
         Transform one message into 0+ messages.
 
@@ -106,18 +112,18 @@ class StatelessTransform(ABC):
             message: Input message
 
         Returns:
-            List of output messages (empty list = filter out)
+            A single Message, a list of Messages, or None to filter out.
 
         Examples:
             >>> async def transform(self, msg):
             ...     # Pass through
-            ...     return [msg]
+            ...     return msg
             ...
             >>> async def transform(self, msg):
             ...     # Filter
             ...     if msg.value > 50:
-            ...         return [msg]
-            ...     return []
+            ...         return msg
+            ...     return None
             ...
             >>> async def transform(self, msg):
             ...     # 1-to-many
@@ -126,12 +132,16 @@ class StatelessTransform(ABC):
         ...
 ```
 
-### Stateful Transformation (N:M)
+### Stateful Transformation
 
 ```python
-class StatefulTransform(ABC):
+class StatefulTransform(Transformation):
     """
     Stateful transformation: maintains state across messages.
+
+    Extends Transformation with a shared state dict and an asyncio lock
+    for thread safety. Subclasses implement transform_with_state() instead
+    of transform().
 
     Use for: aggregations, joins, windows, deduplication.
     """
@@ -139,7 +149,7 @@ class StatefulTransform(ABC):
     def __init__(
         self,
         broker: Broker,
-        input_channels: list[str],
+        input_channel: str,
         output_channel: str
     ):
         """
@@ -147,90 +157,45 @@ class StatefulTransform(ABC):
 
         Args:
             broker: Message broker
-            input_channels: List of channel patterns to subscribe
+            input_channel: Channel pattern to subscribe
             output_channel: Channel to publish results
         """
-        self.broker = broker
-        self.input_channels = input_channels
-        self.output_channel = output_channel
+        super().__init__(broker, input_channel, output_channel)
+        self.state: dict[str, Any] = {}
+        self._lock = asyncio.Lock()
 
-        self.state = {}  # Subclass manages state
-        self._subscription_handles = []
-
-        self.logger = structlog.get_logger().bind(
-            transform=self.__class__.__name__,
-            inputs=input_channels,
-            output=output_channel
-        )
-
-    async def start(self):
-        """Start transformation (subscribe to all inputs)"""
-        for channel in self.input_channels:
-            handle = self.broker.subscribe(channel, self._handle_message)
-            self._subscription_handles.append(handle)
-
-        self.logger.info("transform_started",
-                        input_count=len(self.input_channels))
-
-    async def stop(self):
-        """Stop transformation"""
-        for handle in self._subscription_handles:
-            self.broker.unsubscribe(handle)
-
-        self.logger.info("transform_stopped")
-
-    async def _handle_message(self, message: Message):
+    async def transform(self, message: Message) -> Message | list[Message] | None:
         """
-        Internal message handler.
-
-        Updates state, calls transform(), publishes results.
+        Delegates to transform_with_state() under lock.
         """
-        try:
-            # Update state (subclass-specific)
-            await self.update_state(message)
-
-            # Transform state into messages
-            results = await self.transform()
-
-            # Publish results
-            for result in results:
-                await self.broker.publish(self.output_channel, result)
-
-        except Exception as e:
-            self.logger.error("transform_error",
-                            message_id=str(message.id),
-                            error=str(e),
-                            exc_info=True)
+        async with self._lock:
+            return await self.transform_with_state(message, self.state)
 
     @abstractmethod
-    async def update_state(self, message: Message):
+    async def transform_with_state(
+        self, message: Message, state: dict
+    ) -> Message | list[Message] | None:
         """
-        Update internal state with new message.
+        Transform a message with access to shared state.
 
         Args:
-            message: New message to incorporate into state
-        """
-        ...
-
-    @abstractmethod
-    async def transform(self) -> list[Message]:
-        """
-        Transform current state into output messages.
+            message: Input message
+            state: Mutable state dict shared across invocations
 
         Returns:
-            List of output messages
+            A single Message, a list of Messages, or None to filter out.
         """
         ...
 ```
 
 ---
 
-## Stateless Transformations
+## Built-in Stateless Transformations
 
 ### Filter Transformation
 
 ```python
-class FilterTransform(StatelessTransform):
+class FilterTransform(Transformation):
     """
     Filter messages by predicate.
 
@@ -248,11 +213,11 @@ class FilterTransform(StatelessTransform):
         super().__init__(broker, input_channel, output_channel)
         self.predicate = predicate
 
-    async def transform(self, message: Message) -> list[Message]:
+    async def transform(self, message: Message) -> Message | None:
         """Keep message if predicate is True"""
         if self.predicate(message):
-            return [message]
-        return []  # Filter out
+            return message
+        return None  # Filter out
 
 # Usage
 filter_high_temp = FilterTransform(
@@ -263,12 +228,127 @@ filter_high_temp = FilterTransform(
 )
 ```
 
-### Threshold Alert Transformation
+### Map Transformation
 
 ```python
-class ThresholdAlert(StatelessTransform):
+class MapTransform(Transformation):
+    """
+    Apply a mapping function to each message.
+
+    Args:
+        map_fn: Function that transforms a message into a new message
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channel: str,
+        output_channel: str,
+        map_fn: Callable[[Message], Message]
+    ):
+        super().__init__(broker, input_channel, output_channel)
+        self.map_fn = map_fn
+
+    async def transform(self, message: Message) -> Message:
+        """Apply mapping function"""
+        return self.map_fn(message)
+
+# Usage
+double_value = MapTransform(
+    broker,
+    "sensors.temp",
+    "sensors.temp.doubled",
+    map_fn=lambda msg: Message(
+        key=msg.key,
+        timestamp=msg.timestamp,
+        value=msg.value * 2,
+        tags=msg.tags
+    )
+)
+```
+
+### Aggregate Transformation
+
+```python
+class AggregateTransform(StatefulTransform):
+    """
+    Aggregate values over a window using shared state.
+
+    Args:
+        aggregation: Aggregation function ("avg", "sum", "min", "max", "count")
+        window_size: Number of messages to aggregate over
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channel: str,
+        output_channel: str,
+        aggregation: str = "avg",
+        window_size: int = 10
+    ):
+        super().__init__(broker, input_channel, output_channel)
+        self.aggregation = aggregation
+        self.window_size = window_size
+
+    async def transform_with_state(
+        self, message: Message, state: dict
+    ) -> Message | None:
+        """Accumulate values and emit aggregated result when window is full"""
+        if "values" not in state:
+            state["values"] = []
+
+        state["values"].append(float(message.value))
+
+        # Keep only window_size values
+        if len(state["values"]) > self.window_size:
+            state["values"] = state["values"][-self.window_size:]
+
+        if len(state["values"]) < self.window_size:
+            return None  # Window not yet full
+
+        values = state["values"]
+
+        if self.aggregation == "avg":
+            result_value = sum(values) / len(values)
+        elif self.aggregation == "sum":
+            result_value = sum(values)
+        elif self.aggregation == "min":
+            result_value = min(values)
+        elif self.aggregation == "max":
+            result_value = max(values)
+        elif self.aggregation == "count":
+            result_value = len(values)
+        else:
+            raise ValueError(f"Unknown aggregation: {self.aggregation}")
+
+        return Message(
+            key=f"{self.aggregation}_{message.key}",
+            timestamp=message.timestamp,
+            value=result_value,
+            tags={"window_size": str(self.window_size)}
+        )
+
+# Usage
+avg_temp = AggregateTransform(
+    broker,
+    "sensors.temp",
+    "sensors.temp.avg",
+    aggregation="avg",
+    window_size=10
+)
+```
+
+### Threshold Alert Transformation -- Planned (V1.x)
+
+> **Note**: `ThresholdAlert` is not yet implemented as a built-in. The design below is aspirational for a future V1.x release. Similar behavior can be achieved using `FilterTransform` with a custom predicate.
+
+```python
+class ThresholdAlert(Transformation):
     """
     Emit alert when value crosses threshold.
+
+    Status: Planned (V1.x) — not yet implemented.
 
     Args:
         threshold: Alert threshold
@@ -287,7 +367,7 @@ class ThresholdAlert(StatelessTransform):
         self.threshold = threshold
         self.comparison = comparison
 
-    async def transform(self, message: Message) -> list[Message]:
+    async def transform(self, message: Message) -> Message | None:
         """Check threshold and emit alert"""
         value = float(message.value)
 
@@ -297,7 +377,7 @@ class ThresholdAlert(StatelessTransform):
         )
 
         if triggered:
-            alert = Message(
+            return Message(
                 key="alert",
                 timestamp=message.timestamp,
                 value=f"{message.key} = {value} (threshold: {self.threshold})",
@@ -307,20 +387,23 @@ class ThresholdAlert(StatelessTransform):
                     "threshold": str(self.threshold)
                 }
             )
-            return [alert]
 
-        return []
+        return None
 
 # Usage
 alert = ThresholdAlert(broker, "sensors.temp", "alerts.critical", threshold=240)
 ```
 
-### Unit Conversion
+### Unit Conversion -- Planned (V1.x)
+
+> **Note**: `UnitConverter` is not yet implemented as a built-in. The design below is aspirational for a future V1.x release. Similar behavior can be achieved using `MapTransform` with a custom mapping function.
 
 ```python
-class UnitConverter(StatelessTransform):
+class UnitConverter(Transformation):
     """
     Convert measurement units.
+
+    Status: Planned (V1.x) — not yet implemented.
 
     Example: Fahrenheit to Celsius
     """
@@ -337,16 +420,16 @@ class UnitConverter(StatelessTransform):
         self.conversion_fn = conversion_fn
         self.new_key = new_key
 
-    async def transform(self, message: Message) -> list[Message]:
+    async def transform(self, message: Message) -> Message:
         """Convert value"""
         converted_value = self.conversion_fn(float(message.value))
 
-        return [Message(
+        return Message(
             key=self.new_key or message.key,
             timestamp=message.timestamp,
             value=converted_value,
             tags=message.tags
-        )]
+        )
 
 # Usage
 f_to_c = UnitConverter(
@@ -360,61 +443,68 @@ f_to_c = UnitConverter(
 
 ---
 
-## Stateful Transformations
+## Custom Stateful Transformation Examples
 
-### Latest Combiner
+### Example: Latest Combiner (Custom Pattern)
+
+> **Note**: `LatestCombiner` is not a built-in transformation. It is shown here as an example of how to build a custom stateful transformation using the `StatefulTransform` base class.
 
 ```python
 class LatestCombiner(StatefulTransform):
     """
-    Combine latest values from multiple channels.
+    Combine latest values from multiple keys.
 
-    Emits when all channels have at least one value.
+    Emits a combined message when all expected keys have at least one value.
+    This is a custom example — not a built-in transformation.
     """
 
     def __init__(
         self,
         broker: Broker,
-        input_channels: list[str],
-        output_channel: str
+        input_channel: str,
+        output_channel: str,
+        expected_keys: list[str]
     ):
-        super().__init__(broker, input_channels, output_channel)
-        self.latest = Latest()  # State helper from TECH-02
+        super().__init__(broker, input_channel, output_channel)
+        self.expected_keys = expected_keys
 
-    async def update_state(self, message: Message):
-        """Update latest value for channel"""
-        # Determine which channel this message came from
-        # (In practice, need to track in _handle_message)
-        self.latest.update(message.key, message)
+    async def transform_with_state(
+        self, message: Message, state: dict
+    ) -> Message | None:
+        """Update latest value for key and combine if all available"""
+        if "latest" not in state:
+            state["latest"] = {}
 
-    async def transform(self) -> list[Message]:
-        """Combine latest values if all available"""
-        if self.latest.has_all([ch for ch in self.input_channels]):
-            all_latest = self.latest.all()
+        state["latest"][message.key] = message
 
+        # Check if all expected keys have values
+        if all(k in state["latest"] for k in self.expected_keys):
             combined_value = {
                 key: msg.value
-                for key, msg in all_latest.items()
+                for key, msg in state["latest"].items()
             }
 
-            result = Message(
+            return Message(
                 key="combined",
                 timestamp=datetime.now(timezone.utc),
                 value=combined_value,
                 tags={}
             )
 
-            return [result]
-
-        return []  # Not all channels have values yet
+        return None  # Not all keys have values yet
 ```
 
-### Time Window Aggregator
+### Example: Time Window Aggregator (Custom Pattern)
+
+> **Note**: Time-window-based aggregation can be partially achieved using the built-in `AggregateTransform` with a count-based window. The time-based variant below is a custom example showing how to extend `StatefulTransform` for more advanced use cases.
 
 ```python
 class TimeWindowAggregator(StatefulTransform):
     """
     Aggregate values over time window.
+
+    This is a custom example — not a built-in transformation.
+    For simpler use cases, see the built-in AggregateTransform.
 
     Args:
         window_duration: Window size (e.g., timedelta(minutes=5))
@@ -429,22 +519,29 @@ class TimeWindowAggregator(StatefulTransform):
         window_duration: timedelta,
         aggregation: str = "avg"
     ):
-        super().__init__(broker, [input_channel], output_channel)
-        self.window = TimeWindow(window_duration)  # State helper
+        super().__init__(broker, input_channel, output_channel)
+        self.window_duration = window_duration
         self.aggregation = aggregation
 
-    async def update_state(self, message: Message):
-        """Add message to window"""
-        self.window.add(message)
+    async def transform_with_state(
+        self, message: Message, state: dict
+    ) -> Message | None:
+        """Add message to window and compute aggregation"""
+        if "messages" not in state:
+            state["messages"] = []
 
-    async def transform(self) -> list[Message]:
-        """Compute aggregation over window"""
-        messages = self.window.all()
+        state["messages"].append(message)
 
-        if not messages:
-            return []
+        # Evict expired messages
+        cutoff = datetime.now(timezone.utc) - self.window_duration
+        state["messages"] = [
+            m for m in state["messages"] if m.timestamp >= cutoff
+        ]
 
-        values = [float(m.value) for m in messages]
+        if not state["messages"]:
+            return None
+
+        values = [float(m.value) for m in state["messages"]]
 
         if self.aggregation == "avg":
             result_value = sum(values) / len(values)
@@ -459,22 +556,24 @@ class TimeWindowAggregator(StatefulTransform):
         else:
             raise ValueError(f"Unknown aggregation: {self.aggregation}")
 
-        result = Message(
+        return Message(
             key=f"{self.aggregation}_window",
             timestamp=datetime.now(timezone.utc),
             value=result_value,
-            tags={"window_size": str(len(messages))}
+            tags={"window_size": str(len(state["messages"]))}
         )
-
-        return [result]
 ```
 
-### Deduplicator
+### Deduplicator -- Planned (V1.x)
+
+> **Note**: `Deduplicator` is not yet implemented as a built-in. The design below is aspirational for a future V1.x release.
 
 ```python
 class Deduplicator(StatefulTransform):
     """
     Remove duplicate messages within time window.
+
+    Status: Planned (V1.x) — not yet implemented.
 
     Uses message value hash for duplicate detection.
     """
@@ -486,33 +585,35 @@ class Deduplicator(StatefulTransform):
         output_channel: str,
         window_duration: timedelta = timedelta(minutes=1)
     ):
-        super().__init__(broker, [input_channel], output_channel)
-        self.cache = Cache(ttl=window_duration)  # State helper
+        super().__init__(broker, input_channel, output_channel)
+        self.window_duration = window_duration
 
-    async def update_state(self, message: Message):
-        """Check for duplicates"""
-        # Hash message value
+    async def transform_with_state(
+        self, message: Message, state: dict
+    ) -> Message | None:
+        """Emit message only if not a duplicate within the window"""
         import hashlib
+
+        if "cache" not in state:
+            state["cache"] = {}  # hash -> expiry timestamp
+
+        # Clean expired entries
+        now = datetime.now(timezone.utc)
+        state["cache"] = {
+            k: v for k, v in state["cache"].items() if v > now
+        }
+
+        # Hash message value
         value_hash = hashlib.md5(
             str(message.value).encode()
         ).hexdigest()
 
-        if not self.cache.has(value_hash):
+        if value_hash not in state["cache"]:
             # Not a duplicate
-            self.cache.set(value_hash, True)
-            self._current_message = message
-        else:
-            # Duplicate
-            self._current_message = None
+            state["cache"][value_hash] = now + self.window_duration
+            return message
 
-    async def transform(self) -> list[Message]:
-        """Emit non-duplicate"""
-        if hasattr(self, '_current_message') and self._current_message:
-            result = self._current_message
-            self._current_message = None
-            return [result]
-
-        return []
+        return None  # Duplicate — filter out
 ```
 
 ---
@@ -528,17 +629,23 @@ See [TECH-02-DATA-STRUCTURES](TECH-02-DATA-STRUCTURES.md#state-management-struct
 
 ---
 
-## Built-in Transformations
+## Built-in Transformations Summary
 
-| Transformation           | Type      | Description           | Use Case                 |
-| ------------------------ | --------- | --------------------- | ------------------------ |
-| **FilterTransform**      | Stateless | Filter by predicate   | Remove unwanted messages |
-| **ThresholdAlert**       | Stateless | Alert on threshold    | Monitoring, alarms       |
-| **UnitConverter**        | Stateless | Convert units         | Normalize measurements   |
-| **LatestCombiner**       | Stateful  | Combine latest values | Multi-sensor aggregation |
-| **TimeWindowAggregator** | Stateful  | Aggregate over time   | Statistics, smoothing    |
-| **Deduplicator**         | Stateful  | Remove duplicates     | Data quality             |
-|                          |           |                       |                          |
+| Transformation           | Type      | Status              | Description           | Use Case                 |
+| ------------------------ | --------- | ------------------- | --------------------- | ------------------------ |
+| **FilterTransform**      | Stateless | Implemented         | Filter by predicate   | Remove unwanted messages |
+| **MapTransform**         | Stateless | Implemented         | Apply mapping function| Value conversion, enrichment |
+| **AggregateTransform**   | Stateful  | Implemented         | Aggregate over window | Statistics, smoothing    |
+| **ThresholdAlert**       | Stateless | Planned (V1.x)     | Alert on threshold    | Monitoring, alarms       |
+| **UnitConverter**        | Stateless | Planned (V1.x)     | Convert units         | Normalize measurements   |
+| **Deduplicator**         | Stateful  | Planned (V1.x)     | Remove duplicates     | Data quality             |
+
+Custom examples shown in this document (not built-in):
+
+| Pattern                  | Type      | Description                  | Notes                           |
+| ------------------------ | --------- | ---------------------------- | ------------------------------- |
+| **LatestCombiner**       | Stateful  | Combine latest values by key | Custom example pattern          |
+| **TimeWindowAggregator** | Stateful  | Aggregate over time window   | Custom example; see AggregateTransform for simpler cases |
 
 ---
 

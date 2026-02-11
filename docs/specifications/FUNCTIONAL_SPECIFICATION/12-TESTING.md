@@ -63,33 +63,42 @@ graph LR
 
 **Example:**
 ```python
-from cod3s_data import Framework, RandomSource, CollectDestination
+import asyncio
+from cod3s_data.config import PipelineConfig, SourceConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-# Create test framework
-framework = Framework()
+async def test_random_source():
+    config = PipelineConfig(
+        name="random_test",
+        sources=[
+            SourceConfig(
+                type="random",
+                channel="test.random.temp",
+                params={
+                    "rate": 100,
+                    "max_messages": 100,  # Finite BATCH mode
+                    "min_value": 20.0,
+                    "max_value": 100.0,
+                },
+            )
+        ],
+        destinations=[
+            DestinationConfig(
+                type="collect",
+                channel_pattern="test.random.**",
+                params={},
+            )
+        ],
+    )
 
-# Random source
-source = RandomSource(
-    channel="test.random.temp",
-    mode="BATCH",  # Run once and complete
-    rate_per_second=100,
-    duration_seconds=1,  # Generate for 1 second
-    min_value=20.0,
-    max_value=100.0
-)
-framework.add_source(source)
+    async with Framework(config) as framework:
+        await framework.run()
 
-# Collector
-collector = CollectDestination(channel="test.random.**")
-framework.add_destination(collector)
-
-# Run
-framework.start_and_wait(timeout=5)
-
-# Assert
-messages = collector.get_messages()
-assert len(messages) == 100  # 100 msg/s * 1s
-assert all(20.0 <= m.value <= 100.0 for m in messages)
+    # Access the collect destination
+    collector = framework.destinations[0]
+    messages = collector.get_all()
+    assert len(messages) == 100
+    assert all(20.0 <= m.value <= 100.0 for m in messages)
 ```
 
 ---
@@ -100,48 +109,48 @@ assert all(20.0 <= m.value <= 100.0 for m in messages)
 
 **Example:**
 ```python
-from cod3s_data import SequenceSource
-
-# Sequence source
-source = SequenceSource(
+SourceConfig(
+    type="sequence",
     channel="test.sequence",
-    mode="BATCH",
-    start=1,
-    stop=100,
-    step=1
+    params={
+        "start_value": 1,
+        "end_value": 101,
+        "step_value": 1,
+        "rate": 1000,
+    },
 )
-
 # Expected output: 1, 2, 3, ..., 100
 ```
 
 **Use Cases:**
 - Test ordering preservation
 - Test transformation logic
-- Test deduplication
+- Verify message counts
 
 ---
 
 ### TestSource (Custom Data)
 
-**Purpose:** Inject specific test messages
+> **Planned (V1.x):** A dedicated `TestSource` for injecting custom messages is not yet implemented. See [13-FUTURE](13-FUTURE-V2-V3.md).
 
-**API:**
+**Current workaround:** Use `FileSource` with a temporary JSONL file, or create messages programmatically using the broker directly:
+
 ```python
-from cod3s_data import TestSource, Message
+from cod3s_data.broker.in_memory import InMemoryBroker
+from cod3s_data.core.message import Message
+from datetime import datetime, timezone
 
-# Create test messages
-messages = [
-    Message(key="temp", timestamp="2024-01-15T10:00:00Z", value=25.0),
-    Message(key="temp", timestamp="2024-01-15T10:00:01Z", value=50.0),
-    Message(key="temp", timestamp="2024-01-15T10:00:02Z", value=75.0),
-]
+broker = InMemoryBroker()
+await broker.start()
 
-# Test source
-source = TestSource(
-    channel="test.manual",
-    messages=messages,
-    mode="BATCH"
-)
+# Publish test messages directly
+for value in [25.0, 50.0, 75.0]:
+    msg = Message(
+        key="temp",
+        timestamp=datetime.now(timezone.utc),
+        value=value,
+    )
+    await broker.publish("test.manual", msg)
 ```
 
 **Use Cases:**
@@ -176,50 +185,58 @@ destinations:
 
 ---
 
-### Replay Mode (TRANSPOSE)
+### Replay Mode
 
-**Purpose:** Replay recorded data in tests
+**Purpose:** Replay recorded data in tests using `FileSource` (BATCH mode)
 
 **Configuration:**
 ```yaml
-# Replay recorded data
+# Replay recorded data (BATCH mode - processes all messages immediately)
 sources:
   - type: file
-    path: "/test_data/recorded_messages.jsonl"
     channel: "replay.sensors.temp"
-    mode: TRANSPOSE  # Preserve original timestamps
-    time_scale: 100  # Replay 100x faster (optional)
+    params:
+      file_path: "/test_data/recorded_messages.jsonl"
 ```
+
+> **Note:** TRANSPOSE mode (replay with original timing) is planned for V1.x. Currently, FileSource replays all messages as fast as possible in BATCH mode.
 
 **Test Example:**
 ```python
-from cod3s_data import Framework, FileSource, CollectDestination
+import asyncio
+from cod3s_data.config import PipelineConfig, SourceConfig, TransformConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-framework = Framework()
+async def test_replay():
+    config = PipelineConfig(
+        name="replay_test",
+        sources=[
+            SourceConfig(
+                type="file",
+                channel="replay.sensors.temp",
+                params={"file_path": "/test_data/recorded_messages.jsonl"},
+            )
+        ],
+        transformations=[
+            TransformConfig(
+                type="filter",
+                input_channels="replay.sensors.temp",
+                output_channel="result",
+                params={"predicate_code": "lambda msg: msg.value > 50"},
+            )
+        ],
+        destinations=[
+            DestinationConfig(type="collect", channel_pattern="result", params={})
+        ],
+    )
 
-# Replay source
-source = FileSource(
-    path="/test_data/recorded_messages.jsonl",
-    channel="replay.sensors.temp",
-    mode="TRANSPOSE",
-    time_scale=100  # Speed up replay
-)
-framework.add_source(source)
+    async with Framework(config) as framework:
+        await framework.run()
 
-# Add transformation under test
-transform = MyTransformation(input="replay.sensors.temp", output="result")
-framework.add_transformation(transform)
-
-# Collect results
-collector = CollectDestination(channel="result")
-framework.add_destination(collector)
-
-# Run
-framework.start_and_wait()
-
-# Assertions
-messages = collector.get_messages()
-assert len(messages) > 0
+    collector = framework.destinations[0]
+    messages = collector.get_all()
+    assert len(messages) > 0
+    assert all(m.value > 50 for m in messages)
 ```
 
 ---
@@ -232,27 +249,29 @@ assert len(messages) > 0
 
 **API:**
 ```python
-from cod3s_data import CollectDestination
+from cod3s_data.destinations.collect import CollectDestination
 
-# Create collector
-collector = CollectDestination(
-    channel="test.output",
-    max_messages=1000  # Prevent memory exhaustion
-)
+# When using the Framework with config, use type="collect":
+DestinationConfig(type="collect", channel_pattern="test.output", params={})
 
-# Add to framework
-framework.add_destination(collector)
-
-# Run framework
-framework.start_and_wait()
+# After framework.run(), access the collector:
+collector = framework.destinations[0]  # CollectDestination instance
 
 # Retrieve messages
-messages = collector.get_messages()
+messages = collector.get_all()
 
-# Assertions
-assert len(messages) == expected_count
-assert messages[0].key == "expected_key"
-assert messages[0].value > 100
+# Built-in assertions
+collector.assert_count(100)          # Exact count
+collector.assert_min_count(50)       # Minimum count
+
+# Filter messages
+filtered = collector.filter_by(key="temperature", sensor="TH001")
+
+# Wait for messages (with timeout)
+await collector.wait_for_messages(count=10, timeout=5.0)
+
+# Reset
+collector.clear()
 ```
 
 ---
@@ -315,120 +334,101 @@ assert all(start <= m.timestamp <= end for m in messages)
 
 ### Full Pipeline Tests
 
-**Example: Test complete pipeline**
+**Example: Test filter pipeline using YAML-style config**
 
 ```python
+import asyncio
 import pytest
-from cod3s_data import Framework
-from cod3s_data.sources import RandomSource
-from cod3s_data.transformations import ThresholdAlert
-from cod3s_data.destinations import CollectDestination
+from cod3s_data.config import PipelineConfig, SourceConfig, TransformConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-def test_alert_pipeline():
-    """Test that high temperatures trigger alerts"""
+@pytest.mark.asyncio
+async def test_filter_pipeline():
+    """Test that filter transformation drops values outside range"""
 
-    # Setup
-    framework = Framework()
-
-    # Source: Random temperatures
-    source = RandomSource(
-        channel="sensors.temp",
-        mode="BATCH",
-        rate_per_second=100,
-        duration_seconds=1,
-        min_value=0.0,
-        max_value=200.0
+    config = PipelineConfig(
+        name="filter_test",
+        sources=[
+            SourceConfig(
+                type="sequence",
+                channel="sensors.temp",
+                params={"start_value": 0, "end_value": 200, "step_value": 10, "rate": 1000},
+            )
+        ],
+        transformations=[
+            TransformConfig(
+                type="filter",
+                input_channels="sensors.temp",
+                output_channel="sensors.temp.clean",
+                params={"predicate_code": "lambda msg: 20 <= msg.value <= 100"},
+            )
+        ],
+        destinations=[
+            DestinationConfig(type="collect", channel_pattern="sensors.temp.clean", params={}),
+        ],
     )
-    framework.add_source(source)
 
-    # Transformation: Alert on temp > 100
-    alert = ThresholdAlert(
-        input_channel="sensors.temp",
-        threshold=100,
-        output_channel="alerts.high_temp",
-        pass_through=True
-    )
-    framework.add_transformation(alert)
+    async with Framework(config) as framework:
+        await framework.run()
 
-    # Collectors
-    temp_collector = CollectDestination(channel="sensors.temp")
-    alert_collector = CollectDestination(channel="alerts.high_temp")
-    framework.add_destination(temp_collector)
-    framework.add_destination(alert_collector)
+    collector = framework.destinations[0]
+    messages = collector.get_all()
 
-    # Run
-    framework.start_and_wait(timeout=10)
-
-    # Assertions
-    temp_messages = temp_collector.get_messages()
-    alert_messages = alert_collector.get_messages()
-
-    # All temperatures collected
-    assert len(temp_messages) == 100
-
-    # Only high temps triggered alerts
-    high_temps = [m for m in temp_messages if m.value > 100]
-    assert len(alert_messages) == len(high_temps)
-
-    # Alert messages have correct severity
-    assert all(m.tags.get("severity") == "critical" for m in alert_messages)
+    # Only values 20, 30, ..., 100 should pass
+    assert len(messages) == 9
+    assert all(20 <= m.value <= 100 for m in messages)
 ```
 
 ---
 
-### Multi-Component Tests
+### Direct Component Tests
 
-**Example: Test stateful transformation**
+**Example: Test a transformation directly (without Framework)**
 
 ```python
-from cod3s_data import Framework, TestSource, Message, CollectDestination
-from myapp.transforms import ViscosityComputer
+import pytest
+from cod3s_data.broker.in_memory import InMemoryBroker
+from cod3s_data.core.message import Message
+from cod3s_data.destinations.collect import CollectDestination
+from cod3s_data.transformations.builtin import FilterTransform
+from datetime import datetime, timezone
 
-def test_viscosity_computation():
-    """Test multi-sensor viscosity computation"""
+@pytest.mark.asyncio
+async def test_filter_direct():
+    """Test FilterTransform directly with broker"""
 
-    framework = Framework()
+    broker = InMemoryBroker()
+    await broker.start()
 
-    # Create test messages for 3 sensors
-    temp_messages = [
-        Message(key="temp", timestamp="2024-01-15T10:00:00Z", value=230),
-        Message(key="temp", timestamp="2024-01-15T10:00:01Z", value=235),
-    ]
-
-    speed_messages = [
-        Message(key="speed", timestamp="2024-01-15T10:00:00Z", value=45),
-        Message(key="speed", timestamp="2024-01-15T10:00:01Z", value=50),
-    ]
-
-    force_messages = [
-        Message(key="force", timestamp="2024-01-15T10:00:00Z", value=12),
-        Message(key="force", timestamp="2024-01-15T10:00:01Z", value=15),
-    ]
-
-    # Test sources
-    framework.add_source(TestSource("sensors.temp", temp_messages))
-    framework.add_source(TestSource("sensors.speed", speed_messages))
-    framework.add_source(TestSource("sensors.force", force_messages))
-
-    # Transformation under test
-    viscosity = ViscosityComputer(
-        inputs=["sensors.temp", "sensors.speed", "sensors.force"],
-        output="indicators.viscosity"
+    # Set up filter
+    filt = FilterTransform(
+        broker=broker,
+        input_channels="input",
+        output_channel="output",
+        predicate=lambda msg: msg.value > 50,
     )
-    framework.add_transformation(viscosity)
+    await filt.start()
 
-    # Collector
-    collector = CollectDestination(channel="indicators.viscosity")
-    framework.add_destination(collector)
+    # Set up collector
+    collector = CollectDestination(broker=broker, channel_pattern="output")
+    await collector.start()
 
-    # Run
-    framework.start_and_wait()
+    # Publish test messages
+    for v in [10, 60, 30, 80, 5, 99]:
+        msg = Message(key="test", timestamp=datetime.now(timezone.utc), value=v)
+        await broker.publish("input", msg)
 
-    # Assertions
-    results = collector.get_messages()
-    assert len(results) == 2  # Two complete sets of sensor data
-    assert all(r.key == "viscosity" for r in results)
-    assert all(r.value > 0 for r in results)
+    # Allow async processing
+    await asyncio.sleep(0.1)
+
+    # Assert: only values > 50 pass through
+    messages = collector.get_all()
+    assert len(messages) == 3
+    assert [m.value for m in messages] == [60, 80, 99]
+
+    await filt.stop()
+    await collector.stop()
+    await broker.stop()
 ```
 
 ---
@@ -441,37 +441,39 @@ def test_viscosity_computation():
 
 ```python
 import time
-from cod3s_data import Framework, RandomSource, CollectDestination
+import asyncio
+import pytest
+from cod3s_data.config import PipelineConfig, SourceConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-def test_throughput():
-    """Test that framework can handle 10,000 msg/s"""
+@pytest.mark.asyncio
+async def test_throughput():
+    """Test that framework can handle high throughput"""
 
-    framework = Framework()
-
-    # High-rate source
-    source = RandomSource(
-        channel="perf.test",
-        mode="BATCH",
-        rate_per_second=10000,
-        duration_seconds=5  # 50,000 total messages
+    config = PipelineConfig(
+        name="perf_test",
+        sources=[
+            SourceConfig(
+                type="random",
+                channel="perf.test",
+                params={"rate": 0, "max_messages": 10000},  # rate=0 → no delay
+            )
+        ],
+        destinations=[
+            DestinationConfig(type="collect", channel_pattern="perf.test", params={})
+        ],
     )
-    framework.add_source(source)
 
-    # Collector
-    collector = CollectDestination(channel="perf.test", max_messages=100000)
-    framework.add_destination(collector)
-
-    # Measure time
     start = time.time()
-    framework.start_and_wait(timeout=30)
+    async with Framework(config) as framework:
+        await framework.run()
     elapsed = time.time() - start
 
-    # Assertions
-    messages = collector.get_messages()
+    collector = framework.destinations[0]
+    messages = collector.get_all()
     throughput = len(messages) / elapsed
 
-    assert len(messages) >= 45000  # Allow 10% loss
-    assert throughput >= 9000  # At least 9000 msg/s
+    assert len(messages) == 10000
     print(f"Throughput: {throughput:.0f} msg/s")
 ```
 
@@ -482,42 +484,43 @@ def test_throughput():
 **Example: Measure end-to-end latency**
 
 ```python
-from cod3s_data import Framework, TestSource, Message, CollectDestination
+import asyncio
+import pytest
 from datetime import datetime, timezone
+from cod3s_data.config import PipelineConfig, SourceConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-def test_latency():
-    """Test end-to-end latency"""
+@pytest.mark.asyncio
+async def test_latency():
+    """Test end-to-end latency with sequence source"""
 
-    framework = Framework()
+    config = PipelineConfig(
+        name="latency_test",
+        sources=[
+            SourceConfig(
+                type="sequence",
+                channel="latency.test",
+                params={"start_value": 0, "end_value": 1000, "rate": 0},
+            )
+        ],
+        destinations=[
+            DestinationConfig(type="collect", channel_pattern="latency.test", params={})
+        ],
+    )
 
-    # Create timestamped messages
-    messages = [
-        Message(
-            key="latency_test",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            value=i
-        )
-        for i in range(1000)
-    ]
-
-    source = TestSource("latency.test", messages, mode="BATCH")
-    framework.add_source(source)
-
-    collector = CollectDestination(channel="latency.test")
-    framework.add_destination(collector)
-
-    # Run
     start = datetime.now(timezone.utc)
-    framework.start_and_wait()
+    async with Framework(config) as framework:
+        await framework.run()
     end = datetime.now(timezone.utc)
 
-    # Calculate latency
-    elapsed_ms = (end - start).total_seconds() * 1000
-    avg_latency_ms = elapsed_ms / len(messages)
+    collector = framework.destinations[0]
+    messages = collector.get_all()
 
-    # Assertions
-    assert avg_latency_ms < 5  # Average latency < 5ms
-    print(f"Average latency: {avg_latency_ms:.2f}ms")
+    elapsed_ms = (end - start).total_seconds() * 1000
+    avg_latency_ms = elapsed_ms / len(messages) if messages else 0
+
+    assert len(messages) == 1000
+    print(f"Average latency: {avg_latency_ms:.2f}ms per message")
 ```
 
 ---
@@ -527,86 +530,51 @@ def test_latency():
 ### Pattern 1: Simple Transformation Test
 
 ```python
-def test_filter_transformation():
-    """Test temperature filter"""
+@pytest.mark.asyncio
+async def test_filter_transformation():
+    """Test temperature filter via pipeline config"""
 
-    framework = Framework()
-
-    # Input: temperatures from 0 to 200
-    source = SequenceSource(
-        channel="input",
-        start=0,
-        stop=200,
-        step=10
+    config = PipelineConfig(
+        name="filter_test",
+        sources=[
+            SourceConfig(type="sequence", channel="input",
+                         params={"start_value": 0, "end_value": 200, "step_value": 10, "rate": 1000})
+        ],
+        transformations=[
+            TransformConfig(type="filter", input_channels="input", output_channel="output",
+                            params={"predicate_code": "lambda msg: 20 <= msg.value <= 100"})
+        ],
+        destinations=[
+            DestinationConfig(type="collect", channel_pattern="output", params={})
+        ],
     )
 
-    # Filter: keep only 20-100
-    filter_transform = TemperatureFilter(
-        input="input",
-        output="output",
-        min_value=20,
-        max_value=100
-    )
+    async with Framework(config) as fw:
+        await fw.run()
 
-    collector = CollectDestination(channel="output")
-
-    framework.add_source(source)
-    framework.add_transformation(filter_transform)
-    framework.add_destination(collector)
-
-    framework.start_and_wait()
-
-    # Assertions
-    messages = collector.get_messages()
+    messages = fw.destinations[0].get_all()
     assert len(messages) == 9  # 20, 30, ..., 100
     assert all(20 <= m.value <= 100 for m in messages)
 ```
 
 ---
 
-### Pattern 2: Error Handling Test
+### Pattern 2: Configuration Validation Test
 
 ```python
-def test_transformation_error_handling():
-    """Test that transformation errors are logged and sent to DLQ"""
+import pytest
+from pydantic import ValidationError
+from cod3s_data.config import PipelineConfig
+from cod3s_data.config.loaders import load_yaml
 
-    framework = Framework()
-
-    # Create messages that will cause errors
-    invalid_messages = [
-        Message(key="test", value="invalid_number"),  # String instead of number
-        Message(key="test", value=None),               # None value
-    ]
-
-    source = TestSource("input", invalid_messages)
-    transform = NumericTransformation(input="input", output="output")
-    dlq_collector = CollectDestination(channel="_dlq.**")
-
-    framework.add_source(source)
-    framework.add_transformation(transform)
-    framework.add_destination(dlq_collector)
-
-    framework.start_and_wait()
-
-    # Assertions
-    dlq_messages = dlq_collector.get_messages()
-    assert len(dlq_messages) == 2  # Both invalid messages in DLQ
-```
-
----
-
-### Pattern 3: Configuration Validation Test
-
-```python
 def test_invalid_configuration():
     """Test that invalid configuration is rejected"""
 
-    with pytest.raises(ConfigurationError):
-        framework = Framework.from_yaml("invalid_pipeline.yaml")
+    with pytest.raises(FileNotFoundError):
+        load_yaml("nonexistent.yaml")
 
-    # Or test specific validation
-    with pytest.raises(ValueError, match="buffer_size must be > 0"):
-        dest = Destination(channel="test", buffer_size=0)
+    with pytest.raises(ValidationError):
+        PipelineConfig(name="", sources=[], destinations=[])  # empty name
 ```
 
 ---
@@ -664,7 +632,7 @@ def test_invalid_configuration():
 1. **Test Sources:**
    - RandomSource (synthetic data)
    - SequenceSource (deterministic sequences)
-   - TestSource (custom messages)
+   - TestSource (planned for V1.x - see [13-FUTURE](13-FUTURE-V2-V3.md))
 
 2. **Record/Replay:**
    - Capture production data

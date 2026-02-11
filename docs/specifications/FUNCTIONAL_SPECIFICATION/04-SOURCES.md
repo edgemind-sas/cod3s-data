@@ -96,9 +96,9 @@ Sources operate in one of three **batch modes**, controlling how they produce me
 ```yaml
 sources:
   - type: csv
-    path: "historical_data.csv"
     channel: "sensors.temp"
-    mode: BATCH  # Default for file sources
+    params:
+      file_path: "historical_data.csv"
 ```
 
 **Lifecycle:**
@@ -133,11 +133,12 @@ stateDiagram-v2
 **Example:**
 ```yaml
 sources:
-  - type: mqtt
-    broker: "mqtt://localhost:1883"
-    topic: "sensors/#"
-    channel: "sensors.{topic}"
-    mode: REALTIME  # Default for streaming sources
+  - type: random
+    channel: "sensors.temp"
+    params:
+      rate: 10.0
+      min_value: 20.0
+      max_value: 100.0
 ```
 
 **Lifecycle:**
@@ -157,54 +158,15 @@ stateDiagram-v2
 
 ### TRANSPOSE Mode
 
-**Behavior:** Replay historical data with timestamp preservation
+> **Planned (V1.x):** TRANSPOSE mode is defined in the `BatchMode` enum but its replay behavior (timestamp-based delays, time scaling) is not yet implemented. See [13-FUTURE](13-FUTURE-V2-V3.md).
 
-**Characteristics:**
-- Reads dataset like BATCH
-- Preserves original timestamps (no modification)
-- Optionally applies time scaling (speed up/slow down)
-- Signals completion after full replay
+**Intended behavior:** Replay historical data with timestamp preservation and optional time scaling.
 
-**Use Cases:**
+**Planned use cases:**
 - Replay historical data for analysis
 - Time-compressed simulations
 - Testing transformations with real data
 - Debugging specific time windows
-
-**Example:**
-```yaml
-sources:
-  - type: csv
-    path: "2024-01-15-incident.csv"
-    channel: "replay.sensors.temp"
-    mode: TRANSPOSE
-    time_scale: 10.0  # Replay 10x faster
-```
-
-**Time Scaling:**
-```python
-# Original timestamps preserved, but delays scaled
-original_delays = [t2-t1, t3-t2, t4-t3]  # e.g., [1s, 1s, 1s]
-scaled_delays = [delay/time_scale for delay in original_delays]  # [0.1s, 0.1s, 0.1s] @ 10x
-
-# Messages published with original timestamps, but faster
-# Timestamp: 2024-01-15T10:00:00Z (original)
-# Timestamp: 2024-01-15T10:00:01Z (original, but sent 0.1s later)
-```
-
-**Lifecycle:**
-```mermaid
-stateDiagram-v2
-    [*] --> Ready
-    Ready --> Running: start()
-    Running --> Completed: EOF + replay complete
-    Completed --> [*]
-    Running --> Paused: pause()
-    Paused --> Running: resume()
-    Running --> Cancelled: cancel()
-    Paused --> Cancelled: cancel()
-    Cancelled --> [*]
-```
 
 ---
 
@@ -226,38 +188,32 @@ stateDiagram-v2
 
 ### Lifecycle States
 
+Sources use a simple 5-state lifecycle managed by the `Source` base class:
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: __init__()
-    Created --> Configured: configure()
-    Configured --> Ready: validate()
-    Ready --> Running: start()
-    Running --> Paused: pause()
+    [*] --> Idle: __init__()
+    Idle --> Running: start()
+    Running --> Paused: pause() [REALTIME only]
     Paused --> Running: resume()
-    Running --> Completing: EOF/stop signal
-    Completing --> Completed: cleanup
-    Paused --> Cancelled: cancel()
-    Running --> Cancelled: cancel()
+    Running --> Completed: EOF reached (BATCH)
+    Running --> Stopped: stop()
+    Paused --> Stopped: stop()
     Completed --> [*]
-    Cancelled --> [*]
-    Configured --> Error: validation failure
-    Running --> Error: fatal error
-    Error --> [*]
+    Stopped --> [*]
 ```
 
 ### State Descriptions
 
 | State | Description | Valid Operations |
 |-------|-------------|------------------|
-| **Created** | Object instantiated, not configured | configure() |
-| **Configured** | Configuration loaded | validate(), start() |
-| **Ready** | Validated, ready to run | start() |
-| **Running** | Actively producing messages | pause(), cancel(), get_status() |
-| **Paused** | Temporarily stopped | resume(), cancel() |
-| **Completing** | Finishing (BATCH/TRANSPOSE only) | wait_for_completion() |
-| **Completed** | Finished successfully | None (terminal) |
-| **Cancelled** | User-cancelled | None (terminal) |
-| **Error** | Fatal error occurred | None (terminal) |
+| **Idle** | Object instantiated, ready to run | `start()` |
+| **Running** | Actively producing messages via `produce()` | `pause()`, `stop()` |
+| **Paused** | Temporarily suspended (REALTIME only) | `resume()`, `stop()` |
+| **Completed** | All messages produced (BATCH mode natural end) | None (terminal) |
+| **Stopped** | Explicitly stopped by framework or user | None (terminal) |
+
+> **Note:** There is no separate "configured" or "error" state. Configuration is validated at construction time. Errors during `produce()` propagate as exceptions.
 
 ---
 
@@ -268,38 +224,31 @@ sequenceDiagram
     participant Framework
     participant Source
     participant Broker
-    participant ExtSystem
 
-    Framework->>Source: __init__(config)
-    Source->>Source: Parse configuration
-
-    Framework->>Source: configure()
-    Source->>Source: Validate parameters
-    Source->>ExtSystem: Test connection (optional)
-
-    alt Validation Success
-        Source-->>Framework: Ready
-    else Validation Failure
-        Source-->>Framework: ERROR (config invalid)
-    end
+    Framework->>Source: __init__(broker, channel, batch_mode, ...)
+    Source->>Source: Store parameters
 
     Framework->>Source: start()
-    Source->>Broker: Register as publisher
-    Source->>ExtSystem: Connect/Open
+    Note over Source: Calls produce() and publishes each yielded message
 
-    loop Until EOF or Cancelled
-        Source->>ExtSystem: Fetch data
-        Source->>Source: Create message
+    loop produce() async generator
+        Source->>Source: yield Message(...)
         Source->>Broker: publish(channel, message)
     end
 
-    Source->>ExtSystem: Disconnect/Close
-    Source-->>Framework: Completed
+    alt BATCH mode
+        Source-->>Framework: Completed (generator exhausted)
+    else REALTIME mode
+        Framework->>Source: stop()
+        Source-->>Framework: Stopped
+    end
 ```
 
 ---
 
 ## Control Operations
+
+Sources are controlled via async methods directly on the `Source` instance. The Framework manages sources as `asyncio.Task` objects.
 
 ### Start Operation
 
@@ -307,166 +256,74 @@ sequenceDiagram
 
 **Behavior:**
 ```python
-handle = source.start()
-# Returns SourceHandle for control and monitoring
+# Framework starts each source as an asyncio task
+await source.start()
+# Calls produce() internally and publishes each yielded message
 ```
 
-**Synchronous vs Asynchronous:**
-- **Asynchronous (default):** Returns immediately, source runs in background
-- **Synchronous (blocking):** Waits until source completes (BATCH/TRANSPOSE only)
+The `start()` method is a coroutine that runs the `produce()` async generator loop. It completes when:
+- The generator is exhausted (BATCH mode)
+- `stop()` is called externally (REALTIME mode)
 
-**Example:**
+**In the Framework**, sources are started as concurrent tasks:
 ```python
-# Asynchronous (non-blocking)
-handle = source.start()
-# Continue with other work
-...
-# Check later
-if handle.is_complete():
-    print("Source finished")
-
-# Synchronous (blocking - BATCH mode only)
-source.start_and_wait(timeout=3600)  # Wait up to 1 hour
+# Framework internally does:
+task = asyncio.create_task(source.start())
 ```
 
 ---
 
-### Cancel Operation
+### Stop Operation
 
-**Purpose:** Stop source immediately, discard remaining messages
+**Purpose:** Stop source, end message production
 
 **Behavior:**
-- Source stops producing messages
-- Resources cleaned up (close files, disconnect)
-- State transitions to Cancelled
-- Incomplete data is NOT published
+- Sets `_running = False`, causing the `produce()` loop to exit
+- Calls `_on_stop()` for subclass-specific cleanup
 
 **Example:**
 ```python
-handle = source.start()
-
-# Cancel after some condition
-if error_detected:
-    handle.cancel()
-    # Source stops, resources released
+await source.stop()
 ```
 
 **Use Cases:**
 - User-initiated stop
-- Error condition requires abort
+- Framework shutdown
 - Timeout exceeded
-- System shutdown
 
 ---
 
 ### Pause/Resume Operations
 
-**Purpose:** Temporarily suspend message production
+**Purpose:** Temporarily suspend message production (REALTIME mode only)
 
 **Behavior:**
-- **Pause:** Stop producing messages, maintain state/connection
-- **Resume:** Continue from where paused
+- **Pause:** Sets `_paused = True`, the produce loop spins waiting
+- **Resume:** Sets `_paused = False`, production continues
 
 **Example:**
 ```python
-handle = source.start()
+await source.pause()
+# Source stops sending messages, but stays alive
 
-# Pause during high load
-handle.pause()
-# Source stops sending messages, but connection stays open
-
-# Resume when ready
-handle.resume()
+await source.resume()
 # Source continues from where it left off
 ```
 
-**Use Cases:**
-- Backpressure handling (downstream overload)
-- Scheduled maintenance windows
-- Resource throttling
-- Testing and debugging
-
-**Not Supported:**
-- Sources that cannot maintain state (some streaming APIs)
-- Sources will error on pause() if not supported
+**Note:** `pause()` is a no-op for non-REALTIME sources.
 
 ---
 
-### Progress Monitoring
+### Basic Monitoring
 
-**Purpose:** Track source execution progress
+Sources expose basic state via properties:
 
-**API:**
 ```python
-status = handle.get_status()
-
-# Returns SourceStatus object:
-{
-    "state": "running",           # created, ready, running, paused, completed, cancelled, error
-    "mode": "BATCH",              # BATCH, REALTIME, TRANSPOSE
-
-    # Message counts
-    "total_messages": 10000,      # Total to process (BATCH/TRANSPOSE) or -1 (REALTIME)
-    "messages_sent": 2500,        # Messages published so far
-    "messages_remaining": 7500,   # Remaining (BATCH/TRANSPOSE) or -1 (REALTIME)
-
-    # Time tracking
-    "start_time": "2024-01-15T10:00:00Z",
-    "elapsed_seconds": 125.3,
-    "estimated_remaining_seconds": 375.9,  # ETA for BATCH/TRANSPOSE, None for REALTIME
-
-    # Progress percentage (BATCH/TRANSPOSE only)
-    "progress_percent": 25.0,     # 0-100, or None for REALTIME
-
-    # Error information (if state=error)
-    "error_message": None,        # Error string if failed
-    "error_timestamp": None       # When error occurred
-}
+source.is_running      # bool: True if source is active
+source.message_count   # int: Total messages produced so far
 ```
 
-**Example:**
-```python
-handle = source.start()
-
-while not handle.is_complete():
-    status = handle.get_status()
-
-    if status.mode == "BATCH":
-        print(f"Progress: {status.progress_percent:.1f}% "
-              f"({status.messages_sent}/{status.total_messages})")
-        print(f"ETA: {status.estimated_remaining_seconds:.0f}s")
-    else:
-        print(f"Messages sent: {status.messages_sent}")
-
-    time.sleep(5)
-```
-
----
-
-### Wait for Completion
-
-**Purpose:** Block until source finishes (BATCH/TRANSPOSE only)
-
-**API:**
-```python
-# Wait indefinitely
-handle.wait_for_completion()
-
-# Wait with timeout
-completed = handle.wait_for_completion(timeout=3600)  # 1 hour
-if not completed:
-    print("Timeout - source still running")
-    handle.cancel()
-```
-
-**Use Cases:**
-- Synchronous batch processing
-- Testing (wait for test source to finish)
-- Sequential pipeline steps
-
-**Not Applicable:**
-- REALTIME sources (never complete)
-- Will raise error if called on REALTIME source
+> **Planned (V1.x):** Detailed progress monitoring with `SourceStatus` (progress %, ETA, error info). See [13-FUTURE](13-FUTURE-V2-V3.md).
 
 ---
 
@@ -476,43 +333,46 @@ if not completed:
 
 **Purpose:** Generate random numeric values (testing, simulation)
 
-**Configuration:**
+**Constructor:**
+```python
+RandomSource(
+    broker: Broker,
+    channel: str,
+    rate: float = 1.0,           # Messages per second
+    min_value: float = 0.0,      # Minimum random value
+    max_value: float = 100.0,    # Maximum random value
+    key: str = "random_value",   # Message key
+    max_messages: int | None = None,  # Stop after N messages (None = unlimited)
+)
+```
+
+**YAML Configuration:**
 ```yaml
 sources:
   - type: random
     channel: "test.random.temp"
-    mode: REALTIME
-
-    # Value generation
-    min_value: 20.0
-    max_value: 100.0
-    value_type: "float"  # or "int"
-
-    # Message rate
-    rate_per_second: 10
-    duration_seconds: 60  # Optional - convert REALTIME to finite
-
-    # Message metadata
-    key: "temperature"
-    tags:
-      sensor_id: "random_001"
-      location: "test_lab"
+    params:
+      rate: 10
+      min_value: 20.0
+      max_value: 100.0
+      key: "temperature"
+      max_messages: 1000  # Optional limit (omit for REALTIME)
 ```
+
+> When `max_messages` is set, the source operates in BATCH mode. Otherwise it runs in REALTIME mode until stopped.
 
 **Example Output:**
 ```yaml
 key: "temperature"
 timestamp: "2024-01-15T10:30:45.123Z"
 value: 67.3
-tags:
-  sensor_id: "random_001"
-  location: "test_lab"
+tags: {}
 ```
 
 **Use Cases:**
 - Testing transformations
 - Load testing destinations
-- Simulation of sensor failures
+- Simulation of sensor data
 - Demo environments
 
 ---
@@ -521,24 +381,33 @@ tags:
 
 **Purpose:** Generate numeric sequences (testing, counters)
 
-**Configuration:**
+**Constructor:**
+```python
+SequenceSource(
+    broker: Broker,
+    channel: str,
+    start_value: int = 0,        # Starting value
+    end_value: int | None = None, # Ending value (exclusive), None = unlimited
+    step_value: int = 1,         # Increment step
+    rate: float = 1.0,           # Messages per second
+    key: str = "sequence",       # Message key
+)
+```
+
+**YAML Configuration:**
 ```yaml
 sources:
   - type: sequence
     channel: "test.sequence.counter"
-    mode: BATCH
-
-    # Sequence parameters
-    start: 1
-    stop: 1000
-    step: 1
-
-    # Message rate
-    rate_per_second: 100
-
-    # Message metadata
-    key: "counter"
+    params:
+      start_value: 1
+      end_value: 1000
+      step_value: 1
+      rate: 100
+      key: "counter"
 ```
+
+> When `end_value` is set, the source operates in BATCH mode. Otherwise it runs in REALTIME mode.
 
 **Example Output:**
 ```yaml
@@ -546,11 +415,13 @@ sources:
 key: "counter"
 timestamp: "2024-01-15T10:30:45.001Z"
 value: 1
+tags: {sequence_value: "1"}
 
 # Message 2
 key: "counter"
 timestamp: "2024-01-15T10:30:45.011Z"
 value: 2
+tags: {sequence_value: "2"}
 ```
 
 **Use Cases:**
@@ -562,33 +433,32 @@ value: 2
 
 ### FileSource
 
-**Purpose:** Read line-delimited files (JSON, text)
+**Purpose:** Read messages from JSON/JSONL files (always BATCH mode)
 
-**Configuration:**
+**Constructor:**
+```python
+FileSource(
+    broker: Broker,
+    channel: str,
+    file_path: str | Path,       # Path to JSON/JSONL file
+)
+```
+
+**YAML Configuration:**
 ```yaml
 sources:
   - type: file
-    path: "/data/sensor_logs.jsonl"
     channel: "sensors.import.temp"
-    mode: BATCH  # or TRANSPOSE
-
-    # Format
-    format: "jsonl"  # Each line is a JSON object
-
-    # Message construction
-    key_field: "sensor_name"       # Extract key from JSON field
-    timestamp_field: "ts"           # Extract timestamp from field
-    value_field: "value"            # Extract value from field
-    tags_fields: ["location", "id"] # Extract tags from these fields
-
-    # Performance
-    batch_size: 1000  # Read 1000 lines at a time
+    params:
+      file_path: "/data/sensor_logs.jsonl"
 ```
+
+> FileSource always operates in BATCH mode. It auto-detects format: JSON array, single JSON object, or JSONL (one JSON object per line).
 
 **Input File Example (`sensor_logs.jsonl`):**
 ```json
-{"ts": "2024-01-15T10:00:00Z", "sensor_name": "temp", "value": 23.5, "location": "warehouse_A", "id": "T001"}
-{"ts": "2024-01-15T10:00:01Z", "sensor_name": "temp", "value": 23.6, "location": "warehouse_A", "id": "T001"}
+{"key": "temp", "timestamp": "2024-01-15T10:00:00Z", "value": 23.5, "tags": {"location": "warehouse_A"}}
+{"key": "temp", "timestamp": "2024-01-15T10:00:01Z", "value": 23.6, "tags": {"location": "warehouse_A"}}
 ```
 
 **Output Messages:**
@@ -598,38 +468,38 @@ timestamp: "2024-01-15T10:00:00Z"
 value: 23.5
 tags:
   location: "warehouse_A"
-  id: "T001"
 ```
 
 ---
 
 ### CSVSource
 
-**Purpose:** Read CSV files with headers
+**Purpose:** Read CSV files with headers (always BATCH mode, uses Polars)
 
-**Configuration:**
+**Constructor:**
+```python
+CSVSource(
+    broker: Broker,
+    channel: str,
+    file_path: str | Path,
+    key_column: str = "key",             # Column name for message key
+    timestamp_column: str = "timestamp", # Column name for timestamp
+    value_column: str = "value",         # Column name for value
+    tag_columns: list[str] | None = None, # Column names to include as tags
+)
+```
+
+**YAML Configuration:**
 ```yaml
 sources:
   - type: csv
-    path: "/data/temperature_history.csv"
     channel: "sensors.import.temp"
-    mode: BATCH
-
-    # CSV parsing
-    delimiter: ","
-    has_header: true
-    skip_rows: 0
-
-    # Message construction
-    timestamp_column: "timestamp"  # Column name or index
-    key_column: "sensor_type"      # Optional - or use fixed key
-    value_column: "reading"
-    tag_columns: ["location", "sensor_id"]  # Optional
-
-    # Fixed metadata (if not in CSV)
-    key: "temperature"  # Use if no key_column
-    tags:
-      import_batch: "2024-01-15"
+    params:
+      file_path: "/data/temperature_history.csv"
+      key_column: "sensor_type"
+      timestamp_column: "timestamp"
+      value_column: "reading"
+      tag_columns: ["location", "sensor_id"]
 ```
 
 **Input File Example (`temperature_history.csv`):**
@@ -647,7 +517,6 @@ value: 23.5
 tags:
   location: "warehouse_A"
   sensor_id: "T001"
-  import_batch: "2024-01-15"
 ```
 
 ---
@@ -656,28 +525,22 @@ tags:
 
 ### Basic Source Configuration
 
+Sources are configured in YAML with a `type`, `channel`, and `params` dict:
+
 ```yaml
 sources:
   # Minimal configuration
   - type: random
     channel: "sensors.temp"
+    params: {}
 
   # Full configuration
   - type: csv
-    path: "/data/history.csv"
     channel: "sensors.import.temp"
-    mode: BATCH
-
-    # Delivery guarantee
-    delivery_guarantee: "at-least-once"
-    retry_attempts: 3
-    retry_timeout: 5s
-    dead_letter_channel: "_dlq.source_failures"
-
-    # Source-specific parameters
-    delimiter: ","
-    timestamp_column: "ts"
-    value_column: "value"
+    params:
+      file_path: "/data/history.csv"
+      timestamp_column: "ts"
+      value_column: "value"
 ```
 
 ---
@@ -686,48 +549,34 @@ sources:
 
 ```yaml
 sources:
-  # Real-time temperature sensor
-  - type: mqtt
-    broker: "mqtt://localhost"
-    topic: "sensors/temp/#"
+  # Continuous random data
+  - type: random
     channel: "sensors.temp"
-    mode: REALTIME
+    params:
+      rate: 10.0
+      min_value: 20.0
+      max_value: 100.0
 
   # Historical data import
   - type: csv
-    path: "/data/historical_temp.csv"
     channel: "sensors.temp.historical"
-    mode: TRANSPOSE
-    time_scale: 100  # Replay 100x faster
+    params:
+      file_path: "/data/historical_temp.csv"
 
-  # Test data generator
-  - type: random
-    channel: "test.temp"
-    mode: REALTIME
-    rate_per_second: 1
+  # Finite test sequence
+  - type: sequence
+    channel: "test.counter"
+    params:
+      start_value: 1
+      end_value: 1000
+      rate: 100
 ```
 
 ---
 
 ### Dynamic Channel Names
 
-**Pattern:** Use placeholders in channel names filled from message data
-
-```yaml
-sources:
-  # MQTT - topic becomes part of channel
-  - type: mqtt
-    topic: "sensors/+/temperature"
-    channel: "sensors.{topic[1]}.temperature"
-    # sensors/printer1/temperature → channel: sensors.printer1.temperature
-    # sensors/printer2/temperature → channel: sensors.printer2.temperature
-
-  # CSV - column value becomes part of channel
-  - type: csv
-    path: "data.csv"
-    channel: "sensors.{location}.temp"
-    # Row: location=warehouse_A → channel: sensors.warehouse_A.temp
-```
+> **Planned (V1.x):** Placeholders in channel names filled from message data (e.g., `"sensors.{location}.temp"`). Not yet implemented in V1.0. See [13-FUTURE](13-FUTURE-V2-V3.md).
 
 ---
 
@@ -735,87 +584,86 @@ sources:
 
 ### Source Interface
 
+Subclass `Source` and implement the `produce()` async generator:
+
 ```python
-from cod3s_data import Source, Message
-from typing import Iterator
+import asyncio
+from datetime import datetime, timezone
+from typing import AsyncIterator
 
-class CustomSource(Source):
-    """Custom source template"""
+from cod3s_data.sources.base import Source, BatchMode
+from cod3s_data.broker.base import Broker
+from cod3s_data.core.message import Message
 
-    def __init__(self, config: dict):
-        super().__init__(config)
-        # Extract configuration
-        self.endpoint = config.get("endpoint")
-        self.api_key = config.get("api_key")
 
-    def configure(self):
-        """Validate configuration, test connection"""
-        if not self.endpoint:
-            raise ConfigError("endpoint required")
+class CustomAPISource(Source):
+    """Custom source that polls an external API."""
 
-        # Test connection
-        response = requests.get(self.endpoint, timeout=5)
-        response.raise_for_status()
+    def __init__(
+        self,
+        broker: Broker,
+        channel: str,
+        endpoint: str,
+        rate: float = 1.0,
+    ) -> None:
+        super().__init__(broker, channel, BatchMode.REALTIME)
+        self.endpoint = endpoint
+        self.rate = rate
 
-    def generate_messages(self) -> Iterator[Message]:
+    async def produce(self) -> AsyncIterator[Message]:
         """
-        Main loop - yield messages
+        Async generator that yields messages.
 
-        Framework handles:
-        - Publishing to broker
-        - Delivery guarantees
-        - Error handling
-        - Progress tracking
+        The base class start() method handles:
+        - Publishing each yielded message to the broker
+        - Pause/resume logic
+        - Stop signal checking
         """
-        while True:
-            # Fetch data from external system
-            data = self.fetch_data()
+        import aiohttp
 
-            # Convert to message
-            message = Message(
-                key=data["sensor_name"],
-                timestamp=data["timestamp"],
-                value=data["value"],
-                tags={"location": data["location"]}
-            )
+        async with aiohttp.ClientSession() as session:
+            while True:
+                async with session.get(self.endpoint) as resp:
+                    data = await resp.json()
 
-            yield message
+                yield Message(
+                    key=data["sensor_name"],
+                    timestamp=datetime.now(timezone.utc),
+                    value=data["value"],
+                    tags={"location": data.get("location", "unknown")},
+                )
 
-            # Check if should stop
-            if self.mode == "BATCH" and self.is_complete():
-                break
+                await asyncio.sleep(1.0 / self.rate)
 
-            # Rate limiting
-            time.sleep(1.0 / self.rate_per_second)
-
-    def fetch_data(self):
-        """External system interaction"""
-        response = requests.get(
-            self.endpoint,
-            headers={"Authorization": f"Bearer {self.api_key}"}
-        )
-        return response.json()
-
-    def cleanup(self):
-        """Called on stop/cancel - close connections"""
-        # Close any open connections
+    async def _on_stop(self) -> None:
+        """Optional cleanup on stop."""
         pass
 ```
 
-### Registration
+### Registration via Plugin
+
+Register custom sources using a plugin module with the `ComponentFactory`:
 
 ```python
-# Register custom source
-from cod3s_data import SourceRegistry
+# my_plugin.py
+from cod3s_data.config.factory import ComponentFactory
 
-SourceRegistry.register("custom_api", CustomSource)
+def register(factory: ComponentFactory) -> None:
+    factory.register_source("custom_api", CustomAPISource)
+```
 
-# Use in YAML configuration
+Then use in YAML configuration:
+
+```yaml
+plugins:
+  - my_plugin
+
 sources:
   - type: custom_api
-    endpoint: "https://api.example.com/sensors"
-    api_key: "${API_KEY}"
     channel: "sensors.external.temp"
+    params:
+      endpoint: "https://api.example.com/sensors"
+      rate: 2.0
 ```
 
 ---
@@ -852,25 +700,22 @@ sources:
 
 **Example:**
 ```python
-def generate_messages(self):
+async def produce(self) -> AsyncIterator[Message]:
     retry_count = 0
     while True:
         try:
-            data = self.fetch_data()
+            data = await self.fetch_data()
             retry_count = 0  # Reset on success
-            yield self.create_message(data)
+            yield Message(key=data["key"], timestamp=..., value=data["value"])
         except TransientError as e:
             retry_count += 1
             if retry_count > 3:
-                # Send to DLQ
-                self.send_to_dlq(error=e)
+                logger.error("Max retries exceeded", error=str(e))
                 retry_count = 0
             else:
-                # Retry with backoff
-                time.sleep(2 ** retry_count)
+                await asyncio.sleep(2 ** retry_count)
         except FatalError as e:
-            # Cannot recover - stop source
-            self.log_error(e)
+            logger.error("Fatal error, stopping source", error=str(e))
             break
 ```
 
@@ -912,24 +757,23 @@ def generate_messages(self):
 1. **Batch Modes:**
    - BATCH: Finite dataset, process once
    - REALTIME: Continuous operation
-   - TRANSPOSE: Replay with preserved timestamps
+   - TRANSPOSE: Planned for V1.x (not yet implemented)
 
 2. **Control Operations:**
-   - Start (async or blocking)
-   - Cancel (stop immediately)
-   - Pause/Resume (temporary suspension)
-   - Progress monitoring
+   - `start()` / `stop()` - Async lifecycle
+   - `pause()` / `resume()` - Temporary suspension (REALTIME only)
+   - `is_running`, `message_count` - Basic monitoring
 
 3. **V1.0 Catalog:**
-   - RandomSource (testing)
-   - SequenceSource (testing)
-   - FileSource (JSON lines)
-   - CSVSource (CSV files)
+   - RandomSource (random values, testing)
+   - SequenceSource (sequential numbers, testing)
+   - FileSource (JSON/JSONL files)
+   - CSVSource (CSV files via Polars)
 
 4. **Extensibility:**
-   - Implement Source interface
-   - Register custom sources
-   - Use in YAML configuration
+   - Subclass `Source`, implement `produce()` async generator
+   - Register via plugin with `factory.register_source()`
+   - Use in YAML configuration with `params` dict
 
 **Next:** Explore [Transformations](05-TRANSFORMATIONS.md) to process messages.
 

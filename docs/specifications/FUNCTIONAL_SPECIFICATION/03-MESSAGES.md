@@ -73,34 +73,34 @@ id: "a3b7c9d1-e4f6-4a8b-9c1d-e2f3a4b5c6d7"  # Unique message ID (optional)
 **Purpose:** Enable filtering and routing without parsing the value
 
 **Constraints (V1.0):**
-- All tag values are **strings** (numbers/booleans converted to strings)
+- All tag values are **strings** (numbers/booleans auto-converted to strings)
 - Exact match filtering only (no wildcards, ranges, or regex)
-- OR logic within same key (list of values)
 - AND logic across different keys
+
+> **Planned (V1.x):** OR logic within same key (list of values). See [13-FUTURE](13-FUTURE-V2-V3.md).
 
 **Example:**
 ```python
+from datetime import datetime, timezone
+from cod3s_data.core.message import Message
+
 # Message with tags
-message = {
-    "key": "temperature",
-    "timestamp": "2024-01-15T10:30:45Z",
-    "value": 235.7,
-    "tags": {
+msg = Message(
+    key="temperature",
+    timestamp=datetime.now(timezone.utc),
+    value=235.7,
+    tags={
         "location": "warehouse_A",
         "sensor_type": "temperature",
-        "priority": "high"
-    }
-}
+        "priority": "high",
+    },
+)
 
-# Filtering (exact match + OR support)
-filter = {
-    "location": ["warehouse_A", "warehouse_B"],  # OR: A or B
-    "sensor_type": "temperature"                 # AND: must be temperature
-}
-# Matches: (location = A OR B) AND sensor_type = temperature
+# Adding tags (creates new immutable message):
+msg2 = msg.with_tags(alert="yes")
 ```
 
-**See:** [07-CHANNELS-ROUTING.md#metadata-filtering](07-CHANNELS-ROUTING.md)
+**See:** [07-CHANNELS-ROUTING.md](07-CHANNELS-ROUTING.md)
 
 ---
 
@@ -444,6 +444,9 @@ _dlq.retry_exhausted.alerts.critical
 
 ### DLQ Message Structure
 
+> **Planned (V1.x):** Enriched DLQ metadata (original channel, failure reason, retry count) is not yet implemented. Currently, failed messages are sent to the DLQ channel as-is. See [13-FUTURE](13-FUTURE-V2-V3.md).
+
+**Planned enriched format:**
 ```yaml
 # Original message preserved + error metadata
 key: "temperature"
@@ -453,7 +456,7 @@ tags:
   location: "warehouse_A"
 id: "a3b7c9d1-..."
 
-# DLQ metadata added
+# DLQ metadata (planned)
 dlq_metadata:
   original_channel: "sensors.temp"
   failure_reason: "DatabaseConnectionError"
@@ -509,7 +512,7 @@ transformations:
 
 ### Normalization Strategy
 
-**Decision:** Accept any timezone, normalize to UTC internally
+**Decision:** Require timezone-aware timestamps, normalize to UTC internally. Naive timestamps are **rejected** with a `ValueError`.
 
 ### Accepted Formats
 
@@ -517,9 +520,11 @@ transformations:
 # All valid (ISO 8601 with timezone)
 "2024-01-15T10:00:00Z"           # UTC with Z suffix (preferred)
 "2024-01-15T10:00:00+00:00"      # UTC explicit offset
-"2024-01-15T11:00:00+01:00"      # Paris time (CET)
-"2024-01-15T04:00:00-05:00"      # New York time (EST)
-"2024-01-15T10:00:00"            # No timezone → assumed UTC (warning logged)
+"2024-01-15T11:00:00+01:00"      # Paris time (CET) → converted to UTC
+"2024-01-15T04:00:00-05:00"      # New York time (EST) → converted to UTC
+
+# INVALID - raises ValueError
+"2024-01-15T10:00:00"            # No timezone → REJECTED
 ```
 
 ### Normalization Behavior
@@ -538,29 +543,43 @@ message.timestamp = "2024-01-15T10:00:00Z"
 
 **Original timezone NOT preserved**
 
-### Missing Timezone (Warning)
+### Missing Timezone (Rejected)
 
 ```python
-# Input without timezone
-input_timestamp = "2024-01-15T10:00:00"
+from datetime import datetime, timezone
+from cod3s_data.core.message import Message
 
-# Assumed UTC + warning logged
-WARNING: Timestamp missing timezone, assuming UTC: 2024-01-15T10:00:00
-Normalized: 2024-01-15T10:00:00Z
+# This raises ValueError:
+Message(
+    key="temp",
+    timestamp=datetime(2024, 1, 15, 10, 0, 0),  # naive datetime
+    value=42.0,
+)
+# ValueError: Timestamp must be timezone-aware.
+# Use datetime.now(timezone.utc) instead of datetime.now()
+
+# Correct usage:
+Message(
+    key="temp",
+    timestamp=datetime.now(timezone.utc),  # timezone-aware
+    value=42.0,
+)
 ```
 
-**Recommendation:** Always include timezone in source data
+**Always use timezone-aware datetimes.** Use `datetime.now(timezone.utc)` or `datetime.fromisoformat()` with timezone info.
 
 ### Transformation Timezone Awareness
 
 **Transformations receive UTC timestamps:**
 ```python
-def transform(self, message):
-    # message.timestamp is always UTC
-    timestamp = message.timestamp  # "2024-01-15T10:00:00Z"
+async def transform(self, message):
+    # message.timestamp is always UTC (timezone-aware)
+    timestamp = message.timestamp
 
     # If you need local time, convert explicitly
-    local_time = utc_to_local(timestamp, timezone="Europe/Paris")
+    import zoneinfo
+    local_tz = zoneinfo.ZoneInfo("Europe/Paris")
+    local_time = timestamp.astimezone(local_tz)
 ```
 
 **No automatic conversion to local timezones**
@@ -602,6 +621,8 @@ WARNING: Out-of-order message on channel 'sensors.temp'
 ---
 
 ### Strict Mode: Reject Out-of-Order
+
+> **Planned (V1.x):** Strict out-of-order rejection is not yet implemented. See [13-FUTURE](13-FUTURE-V2-V3.md). The design below shows the planned behavior.
 
 **Behavior:**
 - Channel tracks latest timestamp seen
@@ -708,7 +729,7 @@ class ViscosityComputer(StatefulTransform):
 
 ### Deduplication Transformation
 
-**Built-in transformation for explicit deduplication:**
+> **Planned (V1.x):** `DeduplicationTransform` is not yet implemented. See [13-FUTURE](13-FUTURE-V2-V3.md). The design below shows the planned API.
 
 ```python
 class DeduplicationTransform(StatefulTransform):

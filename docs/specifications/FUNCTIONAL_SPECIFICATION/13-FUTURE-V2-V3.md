@@ -35,11 +35,13 @@ timeline
 
     section V1.0 - Core Framework (Current)
         Foundation : In-Memory Broker
-                   : Test Sources (Random, Sequence, File, CSV)
-                   : Custom Python Transformations
-                   : Basic Destinations (Console, File, InMemory)
-                   : YAML Configuration
-                   : Metrics-as-Messages Observability
+                   : Sources (Random, Sequence, File, CSV)
+                   : Transformations (Filter, Map, Aggregate)
+                   : Destinations (Console, File, InMemory, Collect)
+                   : YAML Configuration + Plugin System
+                   : Observability (Metrics-as-Messages, structlog)
+                   : Observatory (Web UI for debugging)
+                   : CLI Tool (run, validate)
                    : Performance: 10K msg/s, <50ms p99
 
     section V2.0 - Integration (6-12 months)
@@ -69,6 +71,36 @@ timeline
 2. **Incremental Adoption** - Use new features without rewriting pipelines
 3. **No Breaking Changes** - Deprecate gracefully (at least 1 major version notice)
 4. **Community-Driven** - V1.0 feedback shapes V2.0/V3.0 priorities
+
+---
+
+## V1.x - Planned Enhancements
+
+Features described in the V1.0 specification but not yet implemented. These will be added in minor releases (V1.1, V1.2, etc.):
+
+### Sources
+| Feature | Description | Spec Reference |
+|---------|-------------|----------------|
+| **TRANSPOSE mode** | Replay historical data with timestamp-based delays and time scaling | [04-SOURCES](04-SOURCES.md#transpose-mode) |
+| **TestSource** | Inject custom test messages (for testing pipelines) | [12-TESTING](12-TESTING.md) |
+| **Dynamic channel names** | Template-based channel names from message data (e.g., `sensors.{location}.temp`) | [04-SOURCES](04-SOURCES.md#dynamic-channel-names) |
+| **Source progress monitoring** | Detailed `SourceStatus` with progress %, ETA, error info | [04-SOURCES](04-SOURCES.md) |
+
+### Transformations
+| Feature | Description | Spec Reference |
+|---------|-------------|----------------|
+| **DeduplicationTransform** | Remove duplicate messages (key+timestamp, message_id strategies) | [03-MESSAGES](03-MESSAGES.md#deduplication-transformation) |
+| **ThresholdAlert** | Alert on threshold exceeded (pass-through + alert) | [05-TRANSFORMATIONS](05-TRANSFORMATIONS.md) |
+| **UnitConversion** | Convert measurement units (Fahrenheit→Celsius, etc.) | [05-TRANSFORMATIONS](05-TRANSFORMATIONS.md) |
+| **Sampler** | Downsample data (keep 1 in N) | [05-TRANSFORMATIONS](05-TRANSFORMATIONS.md) |
+| **RateLimiter** | Throttle message rate | [05-TRANSFORMATIONS](05-TRANSFORMATIONS.md) |
+
+### Messages & Broker
+| Feature | Description | Spec Reference |
+|---------|-------------|----------------|
+| **Out-of-order strict mode** | Reject messages with timestamps older than latest seen | [03-MESSAGES](03-MESSAGES.md#strict-mode-reject-out-of-order) |
+| **DLQ metadata enrichment** | Add original channel, failure reason, retry count to DLQ messages | [03-MESSAGES](03-MESSAGES.md#dlq-message-structure) |
+| **Tag filtering with OR logic** | Allow list of values for same tag key (OR semantics) | [03-MESSAGES](03-MESSAGES.md#tags-metadata) |
 
 ---
 
@@ -109,7 +141,7 @@ services:
     volumes:
       - ./config:/config
     environment:
-      - CODS_CONFIG=/config/pipeline.yaml
+      - COD3S_CONFIG=/config/pipeline.yaml
       - DATABASE_URL=${DATABASE_URL}
     depends_on:
       - postgres
@@ -144,7 +176,7 @@ spec:
       - name: cod3s-data
         image: cod3s/cod3s-data:2.0.0
         env:
-        - name: CODS_CONFIG
+        - name: COD3S_CONFIG
           value: /config/pipeline.yaml
         - name: DATABASE_URL
           valueFrom:

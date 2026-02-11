@@ -40,8 +40,8 @@ COD3S Data supports **three configuration methods**, designed to work together:
 ```mermaid
 graph LR
     YAML[YAML File<br/>pipeline.yaml] --> Merge[Configuration<br/>Merger]
-    Python[Python API<br/>Framework.add_*] --> Merge
-    Env[Environment Variables<br/>CODS_*] --> Merge
+    Python[Python API<br/>PipelineConfig] --> Merge
+    Env[Environment Variables<br/>COD3S_*] --> Merge
 
     Merge --> Validate[Validation]
     Validate --> Runtime[Runtime<br/>Configuration]
@@ -73,11 +73,12 @@ graph LR
 
 **What can be configured:**
 - Plugins (custom component modules to load)
-- Sources (type, channels, batch mode, delivery guarantee)
-- Transformations (type, inputs, outputs, parameters)
-- Destinations (type, channels, buffering, retry)
-- Broker (history size, performance tuning)
-- Logging and observability
+- Sources (type, channel, source-specific parameters)
+- Transformations (type, input channels, output channel, parameters)
+- Destinations (type, channel pattern, destination-specific parameters)
+- Broker (history size, metrics)
+- Observatory (web UI for debugging)
+- Logging (via CLI flags or structlog configuration)
 
 **What cannot be configured (yet):**
 - Internal data structures (V1.0 - fixed)
@@ -93,6 +94,9 @@ graph LR
 ```yaml
 # pipeline.yaml - Full pipeline configuration
 
+# Pipeline name (optional)
+name: "my_pipeline"
+
 # Plugins (optional) - Custom component modules to load before creating components
 plugins:
   - my_package.custom_sources
@@ -100,47 +104,53 @@ plugins:
 
 # Broker settings (optional)
 broker:
+  enable_metrics: true
   history_size: 100
-  history_ttl: 3600
+
+# Observatory (optional) - Web UI for debugging
+observatory:
+  enabled: true
+  port: 8765
 
 # Sources
 sources:
   - type: csv
-    path: "/data/sensors.csv"
     channel: "sensors.temp"
-    mode: BATCH
+    params:
+      path: "/data/sensors.csv"
+      timestamp_column: "ts"
+      value_column: "reading"
 
   - type: random
     channel: "test.random"
-    mode: REALTIME
-    rate_per_second: 10
+    params:
+      rate: 10
+      min_value: 20.0
+      max_value: 100.0
 
 # Transformations
 transformations:
-  - type: threshold_alert
-    input: "sensors.temp"
-    threshold: 100
-    output: "alerts.critical"
+  - type: filter
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.filtered"
+    params:
+      condition: "value > 50"
 
-  - type: deduplication
-    input: "sensors.temp"
-    output: "sensors.temp.clean"
-    window: 60
+  - type: map
+    input_channels: "sensors.temp.filtered"
+    output_channel: "sensors.temp.celsius"
+    params:
+      expression: "value - 273.15"
 
 # Destinations
 destinations:
   - type: console
-    channel: "alerts.**"
-    format: "pretty"
+    channel_pattern: "sensors.temp.*"
+    params:
+      format: "pretty"
 
-  - type: file
-    channel: "sensors.**"
-    path: "/output/sensors.jsonl"
-
-# Logging
-logging:
-  level: "INFO"
-  format: "json"
+  - type: collect
+    channel_pattern: "sensors.temp.celsius"
 ```
 
 ---
@@ -149,35 +159,33 @@ logging:
 
 ```yaml
 sources:
-  # CSV file source
+  # CSV file source (always operates in BATCH mode)
   - type: csv
-    name: "historical_import"  # Optional name for reference
-    path: "/data/temperature_history.csv"
-    channel: "sensors.{location}.temp"
-    mode: BATCH
-
-    # CSV parsing
-    delimiter: ","
-    has_header: true
-    timestamp_column: "ts"
-    value_column: "reading"
-    tag_columns: ["location", "sensor_id"]
-
-    # Delivery guarantee
-    delivery_guarantee: "at-least-once"
-    retry_attempts: 3
-    retry_timeout: 5s
-    dead_letter_channel: "_dlq.source_failures"
+    label: "historical_import"  # Optional label for display
+    channel: "sensors.temp"
+    params:
+      path: "/data/temperature_history.csv"
+      timestamp_column: "ts"
+      value_column: "reading"
+      tag_columns: ["location", "sensor_id"]
 
   # Real-time random source
   - type: random
-    name: "test_generator"
+    label: "test_generator"
     channel: "test.random.temp"
-    mode: REALTIME
-    rate_per_second: 100
-    min_value: 20.0
-    max_value: 100.0
-    duration_seconds: 60  # Run for 60s then stop
+    params:
+      rate: 100
+      min_value: 20.0
+      max_value: 100.0
+
+  # Sequence source
+  - type: sequence
+    channel: "test.sequence"
+    params:
+      start_value: 0
+      end_value: 100
+      step_value: 1
+      rate: 10
 ```
 
 ---
@@ -186,34 +194,43 @@ sources:
 
 ```yaml
 transformations:
-  # Built-in transformation
-  - type: threshold_alert
-    name: "temp_alert"
-    input: "sensors.*.temp"
-    threshold: 100
-    severity: "critical"
-    output: "alerts.critical.temp"
+  # Filter transformation
+  - type: filter
+    label: "temp_filter"
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.high"
+    params:
+      condition: "value > 80"
 
-  # Custom Python transformation
-  - type: custom_python
-    name: "viscosity_computer"
-    class: "myapp.transforms.ViscosityComputer"
-    inputs:
-      - "sensors.{id}.temperature"
-      - "sensors.{id}.speed"
-      - "sensors.{id}.force"
-    output: "indicators.{id}.viscosity"
-    parameters:
+  # Map transformation
+  - type: map
+    label: "unit_converter"
+    input_channels: "sensors.temp.high"
+    output_channel: "sensors.temp.converted"
+    params:
+      expression: "(value - 32) * 5 / 9"
+
+  # Aggregate transformation
+  - type: aggregate
+    label: "temp_avg"
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.avg"
+    params:
+      window: 60
+      function: "mean"
+
+  # Multi-channel input (custom plugin transform)
+  - type: viscosity       # Registered by a plugin
+    input_channels:
+      - "sensors.temp"
+      - "sensors.speed"
+      - "sensors.force"
+    output_channel: "indicators.viscosity"
+    params:
       calibration_factor: 1.2
-      min_speed: 10
-
-  # Deduplication
-  - type: deduplication
-    input: "sensors.temp.raw"
-    output: "sensors.temp.clean"
-    window: 60  # 60 seconds
-    strategy: "key+timestamp"
 ```
+
+> **Note:** Only `filter`, `map`, and `aggregate` transforms are built-in in V1.0. Additional transforms (threshold alerts, deduplication, etc.) are **Planned (V1.x)** — see [13-FUTURE](13-FUTURE-V2-V3.md).
 
 ---
 
@@ -223,39 +240,22 @@ transformations:
 destinations:
   # Console destination
   - type: console
-    name: "debug_console"
-    channel: "alerts.**"
-    format: "pretty"
-    colors: true
-    history: "none"  # Real-time only
+    label: "debug_console"
+    channel_pattern: "alerts.**"
+    params:
+      format: "pretty"
 
   # File destination
   - type: file
-    name: "sensor_archive"
-    channel: "sensors.**"
-    path: "/data/sensors.jsonl"
-    format: "jsonl"
-    rotation:
-      max_size: "100MB"
-      max_age: "24h"
-      max_files: 7
-
-    # Buffering
-    buffer_size: 5000
-    overflow_strategy: "drop_oldest"
-
-    # Retry
-    retry_attempts: 3
-    retry_backoff: "exponential"
-    retry_initial_delay: 1s
-    retry_max_delay: 60s
-    dead_letter_channel: "_dlq.file_failures"
+    label: "sensor_archive"
+    channel_pattern: "sensors.**"
+    params:
+      path: "/data/sensors.jsonl"
 
   # In-memory collector (testing)
   - type: collect
-    name: "test_collector"
-    channel: "test.results"
-    max_messages: 1000
+    label: "test_collector"
+    channel_pattern: "test.results"
 ```
 
 ---
@@ -264,50 +264,41 @@ destinations:
 
 ```yaml
 broker:
-  # History buffer
-  history_enabled: true
-  history_size: 100  # Default per channel
-  history_ttl: 3600  # 1 hour
+  # Metrics emission (publishes to _metrics.broker.* channels)
+  enable_metrics: true  # Default: true
 
-  # Per-channel overrides
-  channel_history:
-    "sensors.**":
-      size: 1000
-      ttl: 7200
-    "alerts.**":
-      size: 50
-      ttl: 300
-
-  # Out-of-order handling
-  reject_out_of_order: false  # Global default
-  warn_out_of_order: true
-
-  channels:
-    "sensors.critical.*":
-      reject_out_of_order: true  # Override for critical sensors
+  # History buffer size (per channel)
+  history_size: 100  # Default: 100
 ```
 
 ---
 
-### Logging Configuration
+### Observatory Configuration
 
 ```yaml
-logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  format: "json"  # or "text"
-  output: "stdout"  # or file path
+observatory:
+  enabled: true         # Enable Observatory web UI
+  host: "0.0.0.0"      # Listen host (default: 0.0.0.0)
+  port: 8765            # Listen port (default: 8765)
+  buffer_size: 1000     # Message buffer size
+  memory_limit_mb: 100  # Memory limit for buffered data
 
-  # Structured logging
-  include_timestamps: true
-  include_trace_ids: true
+  # Debug mode
+  debug:
+    enabled: false
+    granularity: "message"
+    auto_pause: true
 
-  # Log filtering
-  filters:
-    - component: "broker"
-      level: "DEBUG"
-    - component: "destinations"
-      level: "WARNING"
+  # Sampling configuration
+  sampling:
+    strategy: "all"       # all, random, interval
+    rate: 1.0             # Sampling rate (for "random" strategy)
+    interval_ms: 100      # Sampling interval (for "interval" strategy)
 ```
+
+Observatory can also be enabled via:
+- **CLI flag:** `cod3s-data run pipeline.yaml --observatory`
+- **Environment variables:** `COD3S_OBSERVATORY_ENABLED=true` (see [Environment Variables](#environment-variables))
 
 ---
 
@@ -316,101 +307,85 @@ logging:
 ### Programmatic Configuration
 
 ```python
-from cod3s_data import Framework
-from cod3s_data.sources import CSVSource, RandomSource
-from cod3s_data.transformations import ThresholdAlert
-from cod3s_data.destinations import ConsoleDestination, FileDestination
+import asyncio
+from cod3s_data.config.models import (
+    PipelineConfig,
+    SourceConfig,
+    TransformConfig,
+    DestinationConfig,
+    BrokerConfig,
+)
+from cod3s_data.framework import Framework
 
-# Create framework
-framework = Framework()
-
-# Configure broker
-framework.configure_broker(
-    history_size=100,
-    history_ttl=3600
+# Build configuration
+config = PipelineConfig(
+    name="my_pipeline",
+    broker=BrokerConfig(
+        enable_metrics=True,
+        history_size=100,
+    ),
+    sources=[
+        SourceConfig(
+            type="csv",
+            channel="sensors.temp",
+            params={
+                "path": "/data/sensors.csv",
+                "timestamp_column": "ts",
+                "value_column": "reading",
+            },
+        ),
+        SourceConfig(
+            type="random",
+            channel="test.random",
+            params={
+                "rate": 10,
+                "min_value": 20.0,
+                "max_value": 100.0,
+            },
+        ),
+    ],
+    transformations=[
+        TransformConfig(
+            type="filter",
+            input_channels="sensors.temp",
+            output_channel="sensors.temp.high",
+            params={"condition": "value > 80"},
+        ),
+    ],
+    destinations=[
+        DestinationConfig(
+            type="console",
+            channel_pattern="sensors.temp.*",
+            params={"format": "pretty"},
+        ),
+    ],
 )
 
-# Add sources
-csv_source = CSVSource(
-    path="/data/sensors.csv",
-    channel="sensors.temp",
-    mode="BATCH",
-    timestamp_column="ts",
-    value_column="reading"
-)
-framework.add_source(csv_source)
+# Run pipeline (async context manager)
+async def main():
+    async with Framework(config) as framework:
+        await framework.run()
 
-random_source = RandomSource(
-    channel="test.random",
-    mode="REALTIME",
-    rate_per_second=10,
-    min_value=20.0,
-    max_value=100.0
-)
-framework.add_source(random_source)
-
-# Add transformations
-alert_transform = ThresholdAlert(
-    input_channel="sensors.temp",
-    output_channel="alerts.critical",
-    threshold=100
-)
-framework.add_transformation(alert_transform)
-
-# Add destinations
-console_dest = ConsoleDestination(
-    channel="alerts.**",
-    format="pretty"
-)
-framework.add_destination(console_dest)
-
-file_dest = FileDestination(
-    channel="sensors.**",
-    path="/output/sensors.jsonl",
-    buffer_size=5000
-)
-framework.add_destination(file_dest)
-
-# Start framework
-framework.start()
-
-# Run for some time or wait for completion
-import time
-time.sleep(60)
-
-# Stop framework
-framework.stop()
+asyncio.run(main())
 ```
 
 ---
 
-### Dynamic Configuration
-
-**Add components at runtime:**
+### Loading from YAML
 
 ```python
-framework = Framework()
-framework.start()
+from cod3s_data.config.loaders import load_yaml
+from cod3s_data.framework import Framework
 
-# Add source dynamically
-new_source = RandomSource(channel="dynamic.sensor")
-framework.add_source(new_source)
+# Load configuration from YAML file
+config = load_yaml("pipeline.yaml")
 
-# Add destination dynamically
-new_dest = ConsoleDestination(channel="dynamic.**")
-framework.add_destination(new_dest)
+# Run pipeline
+async def main():
+    async with Framework(config) as framework:
+        await framework.run()
 
-# Components start immediately
-```
-
-**Remove components at runtime:**
-
-```python
-# Remove source
-framework.remove_source(csv_source)
-
-# Remove destination
-framework.remove_destination(console_dest)
+asyncio.run(main())
 ```
 
 ---
@@ -451,7 +426,7 @@ cod3s-data run pipeline.yaml --plugin myapp.transforms
 
 **Programmatic Usage:**
 ```python
-from cod3s_data.config import PipelineConfig
+from cod3s_data.config.models import PipelineConfig
 from cod3s_data.framework import Framework
 
 config = PipelineConfig(
@@ -459,7 +434,7 @@ config = PipelineConfig(
     ...
 )
 
-# Or pass plugins at framework level
+# Or pass plugins at framework level (merged with config.plugins)
 framework = Framework(config, plugins=["myapp.transforms"])
 ```
 
@@ -473,54 +448,60 @@ framework = Framework(config, plugins=["myapp.transforms"])
 
 ```yaml
 sources:
-  - type: mqtt
-    broker: "${MQTT_BROKER_URL}"  # From environment
-    username: "${MQTT_USERNAME}"
-    password: "${MQTT_PASSWORD}"
+  - type: csv
     channel: "sensors.temp"
-
-destinations:
-  - type: database
-    connection_string: "${DATABASE_URL}"
-    table: "sensor_data"
+    params:
+      path: "${DATA_PATH}/sensors.csv"
 ```
 
 **Set environment variables:**
 
 ```bash
-export MQTT_BROKER_URL="mqtt://localhost:1883"
-export MQTT_USERNAME="admin"
-export MQTT_PASSWORD="secret123"
-export DATABASE_URL="postgresql://user:pass@localhost/db"
+export DATA_PATH="/data/production"
 
 # Run framework
-cod3s-data --config pipeline.yaml
+cod3s-data run pipeline.yaml
 ```
 
 ---
 
 ### Framework Environment Variables
 
-**Reserved prefix:** `CODS_*`
+**Reserved prefix:** `COD3S_*`
 
-**Configuration variables:**
+**Pipeline variables:**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CODS_CONFIG` | Path to YAML config file | `./pipeline.yaml` |
-| `CODS_LOG_LEVEL` | Logging level | `INFO` |
-| `CODS_LOG_FORMAT` | Log format (json/text) | `json` |
-| `CODS_BROKER_HISTORY_SIZE` | Broker history size | `100` |
-| `CODS_METRICS_ENABLED` | Enable metrics emission | `true` |
+| `COD3S_PIPELINE_NAME` | Pipeline name override | `cod3s_pipeline` |
+| `COD3S_BROKER_ENABLE_METRICS` | Enable broker metrics | `true` |
+| `COD3S_BROKER_HISTORY_SIZE` | Broker history size | `100` |
+
+**Observatory variables:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `COD3S_OBSERVATORY_ENABLED` | Enable Observatory | `false` |
+| `COD3S_OBSERVATORY_HOST` | Observatory host | `0.0.0.0` |
+| `COD3S_OBSERVATORY_PORT` | Observatory port | `8765` |
+| `COD3S_OBSERVATORY_BUFFER_SIZE` | Message buffer size | `1000` |
+| `COD3S_OBSERVATORY_MEMORY_LIMIT_MB` | Memory limit (MB) | `100` |
+| `COD3S_OBSERVATORY_DEBUG` | Enable debug mode | `false` |
+| `COD3S_OBSERVATORY_DEBUG_GRANULARITY` | Debug granularity | `message` |
+| `COD3S_OBSERVATORY_DEBUG_AUTO_PAUSE` | Auto-pause on debug | `true` |
+| `COD3S_OBSERVATORY_SAMPLING_STRATEGY` | Sampling strategy | `all` |
+| `COD3S_OBSERVATORY_SAMPLING_RATE` | Sampling rate | `1.0` |
+| `COD3S_OBSERVATORY_SAMPLING_INTERVAL_MS` | Sampling interval | `100` |
 
 **Example:**
 
 ```bash
-export CODS_CONFIG="/etc/cod3s/production.yaml"
-export CODS_LOG_LEVEL="WARNING"
-export CODS_BROKER_HISTORY_SIZE="1000"
+export COD3S_PIPELINE_NAME="production"
+export COD3S_BROKER_HISTORY_SIZE="1000"
+export COD3S_OBSERVATORY_ENABLED="true"
+export COD3S_OBSERVATORY_PORT="9000"
 
-cod3s-data
+cod3s-data run pipeline.yaml
 ```
 
 ---
@@ -531,30 +512,28 @@ cod3s-data
 
 **1. Environment variables (recommended):**
 ```yaml
-destinations:
-  - type: database
-    connection_string: "${DATABASE_URL}"
+sources:
+  - type: custom_db
+    channel: "sensors.temp"
+    params:
+      connection_string: "${DATABASE_URL}"
 ```
 
 **2. Secret files:**
 ```yaml
-destinations:
-  - type: database
-    connection_string_file: "/run/secrets/db_connection"
+sources:
+  - type: custom_db
+    channel: "sensors.temp"
+    params:
+      connection_string_file: "/run/secrets/db_connection"
 ```
 
-**3. Secret management services (V2.0+):**
-```yaml
-destinations:
-  - type: database
-    connection_string:
-      vault: "secret/data/database/url"
-```
+**3. Secret management services — Planned (V2.0+)**
 
 **Never:**
-- ❌ Hard-code secrets in YAML
-- ❌ Commit secrets to version control
-- ❌ Log secrets (framework redacts known patterns)
+- Hard-code secrets in YAML
+- Commit secrets to version control
+- Log secrets (framework redacts known patterns)
 
 ---
 
@@ -564,17 +543,15 @@ destinations:
 
 **Priority (highest to lowest):**
 
-1. **Python API** (programmatic)
-2. **Environment Variables** (runtime)
-3. **YAML Files** (declarative)
-4. **Framework Defaults** (built-in)
+1. **Environment Variables** (runtime overrides via `COD3S_*`)
+2. **YAML Files** / **Python API** (declarative configuration)
+3. **Framework Defaults** (built-in)
 
 ```mermaid
 graph TB
-    Defaults[Framework Defaults<br/>Built-in values] --> YAML[YAML File<br/>pipeline.yaml]
-    YAML --> Env[Environment Variables<br/>CODS_*, ${VAR}]
-    Env --> Python[Python API<br/>Framework.configure_*]
-    Python --> Final[Final Configuration]
+    Defaults[Framework Defaults<br/>Built-in values] --> YAML[YAML File / Python API<br/>PipelineConfig]
+    YAML --> Env[Environment Variables<br/>COD3S_*]
+    Env --> Final[Final Configuration]
 
     style Final fill:#f9f,stroke:#333,stroke-width:2px
 ```
@@ -585,66 +562,17 @@ graph TB
 
 ```python
 # 1. Framework default
-history_size = 100  # Built-in default
+history_size = 100  # Built-in default (BrokerConfig)
 
-# 2. YAML file
+# 2. YAML file or Python API
 # pipeline.yaml:
 #   broker:
 #     history_size: 500
 
-# 3. Environment variable
-# export CODS_BROKER_HISTORY_SIZE=1000
+# 3. Environment variable (overrides YAML)
+# export COD3S_BROKER_HISTORY_SIZE=1000
 
-# 4. Python API
-framework.configure_broker(history_size=2000)
-
-# Final value: 2000 (Python API wins)
-```
-
----
-
-### Merge Behavior
-
-**Simple values:** Last one wins (override)
-
-**Collections (lists):** Append (extend)
-
-```yaml
-# base.yaml
-sources:
-  - type: csv
-    path: "data.csv"
-
-# override.yaml
-sources:
-  - type: random
-    channel: "test"
-
-# Merged result (both sources):
-sources:
-  - type: csv
-    path: "data.csv"
-  - type: random
-    channel: "test"
-```
-
-**Dictionaries:** Recursive merge
-
-```yaml
-# base.yaml
-broker:
-  history_size: 100
-  history_ttl: 3600
-
-# override.yaml
-broker:
-  history_size: 500  # Override
-  # history_ttl: 3600  # Inherited from base
-
-# Merged result:
-broker:
-  history_size: 500   # Overridden
-  history_ttl: 3600   # Inherited
+# Final value: 1000 (environment variable wins)
 ```
 
 ---
@@ -653,17 +581,20 @@ broker:
 
 ### Configuration Validation
 
-**Framework validates configuration at startup:**
+**Framework validates configuration at load time (Pydantic v2):**
 
 ```python
+from cod3s_data.config.loaders import load_yaml
+
 try:
-    framework = Framework.from_yaml("pipeline.yaml")
-except ConfigurationError as e:
+    config = load_yaml("pipeline.yaml")
+except FileNotFoundError as e:
+    print(f"File not found: {e}")
+except ValueError as e:
     print(f"Configuration error: {e}")
     # Example errors:
-    # - Missing required field: sources[0].channel
-    # - Invalid value: retry_attempts must be >= 0
-    # - Unknown type: sources[0].type="unknown_source"
+    # - Field required: sources[0].channel
+    # - Input should be a valid string: sources[0].type
 ```
 
 ---
@@ -672,7 +603,7 @@ except ConfigurationError as e:
 
 **Plugin validation:**
 - Plugin module can be imported
-- Plugin has a `register` or `register_all` callable
+- Plugin has a `register` callable
 - Plugin `register()` executes without errors
 
 **Type validation:**
@@ -682,19 +613,11 @@ except ConfigurationError as e:
 
 **Required fields:**
 - Sources must have: `type`, `channel`
-- Transformations must have: `type`, `input`, `output`
-- Destinations must have: `type`, `channel`
+- Transformations must have: `type`, `input_channels`, `output_channel`
+- Destinations must have: `type`, `channel_pattern`
 
 **Value constraints:**
-- `buffer_size` > 0
-- `retry_attempts` >= 0
-- `rate_per_second` > 0
 - `history_size` >= 0
-
-**Cross-field validation:**
-- Channel names follow naming rules
-- Wildcard patterns are valid
-- File paths exist (for file sources)
 
 ---
 
@@ -710,19 +633,17 @@ cod3s-data validate pipeline.yaml
 cod3s-data validate pipeline.yaml --plugin my_package.custom_transforms
 
 # Output:
-# ✓ Configuration valid
+# ✓ Configuration is valid!
 #
 # Pipeline: my_pipeline
 #   Plugins: 1
 #   Sources: 2
-#   Transformations: 3
-#   Destinations: 2
-
-# Or if errors:
-# ✗ Configuration invalid
-# ERROR: sources[0].channel: Required field missing
-# ERROR: transformations[1].threshold: Must be a number
-# WARNING: destinations[0].buffer_size: Value 0 will disable buffering
+#     1. csv -> sensors.temp
+#     2. random -> test.random
+#   Transformations: 1
+#     1. filter: sensors.temp -> sensors.temp.filtered
+#   Destinations: 1
+#     1. console <- sensors.**
 ```
 
 ---
@@ -737,20 +658,23 @@ cod3s-data validate pipeline.yaml --plugin my_package.custom_transforms
 sources:
   - type: random
     channel: "sensors.temp"
-    rate_per_second: 1
-    min_value: 20
-    max_value: 100
+    params:
+      rate: 1
+      min_value: 20
+      max_value: 100
 
 transformations:
-  - type: threshold_alert
-    input: "sensors.temp"
-    threshold: 80
-    output: "alerts.high_temp"
+  - type: filter
+    input_channels: "sensors.temp"
+    output_channel: "alerts.high_temp"
+    params:
+      condition: "value > 80"
 
 destinations:
   - type: console
-    channel: "alerts.**"
-    format: "pretty"
+    channel_pattern: "alerts.**"
+    params:
+      format: "pretty"
 ```
 
 ---
@@ -758,121 +682,130 @@ destinations:
 ### Example 2: Historical Data Processing
 
 ```yaml
-# Batch processing of historical data
+# Batch processing of historical data (CSV files always operate in BATCH mode)
 
 sources:
   - type: csv
-    path: "/data/2024-01-15-incident.csv"
     channel: "replay.sensors.temp"
-    mode: TRANSPOSE  # Preserve timestamps
-    time_scale: 10   # Replay 10x faster
+    params:
+      path: "/data/2024-01-15-incident.csv"
+      timestamp_column: "ts"
+      value_column: "reading"
 
 transformations:
-  - type: custom_python
-    class: "analysis.RootCauseAnalyzer"
-    input: "replay.sensors.temp"
-    output: "analysis.results"
+  - type: map
+    input_channels: "replay.sensors.temp"
+    output_channel: "analysis.results"
+    params:
+      expression: "value * calibration_factor"
 
 destinations:
   - type: file
-    channel: "analysis.results"
-    path: "/output/analysis_report.json"
+    channel_pattern: "analysis.results"
+    params:
+      path: "/output/analysis_report.jsonl"
 ```
+
+> **Note:** TRANSPOSE mode (preserving original timestamps during replay) is **Planned (V1.x)**.
 
 ---
 
-### Example 3: Multi-Sensor Processing
+### Example 3: Multi-Sensor Processing with Plugin
 
 ```yaml
-# Compute derived metrics from multiple sensors
+# Compute derived metrics from multiple sensors using a custom plugin
+
+plugins:
+  - physics_transforms
 
 sources:
-  - type: mqtt
-    broker: "${MQTT_BROKER}"
-    topics:
-      - "sensors/+/temperature"
-      - "sensors/+/speed"
-      - "sensors/+/force"
-    channel: "sensors.{topic[1]}.{topic[2]}"
+  - type: random
+    channel: "sensors.temperature"
+    params:
+      rate: 10
+      min_value: 50
+      max_value: 200
+
+  - type: random
+    channel: "sensors.speed"
+    params:
+      rate: 10
+      min_value: 0
+      max_value: 100
 
 transformations:
-  - type: custom_python
-    class: "physics.ViscosityComputer"
-    inputs:
-      - "sensors.{id}.temperature"
-      - "sensors.{id}.speed"
-      - "sensors.{id}.force"
-    output: "indicators.{id}.viscosity"
+  - type: viscosity       # Registered by physics_transforms plugin
+    input_channels:
+      - "sensors.temperature"
+      - "sensors.speed"
+    output_channel: "indicators.viscosity"
+    params:
+      calibration_factor: 1.2
+      min_speed: 10
 
 destinations:
-  - type: database
-    connection_string: "${DATABASE_URL}"
-    channel: "indicators.**"
-    table: "computed_metrics"
+  - type: console
+    channel_pattern: "indicators.**"
+    params:
+      format: "pretty"
 ```
 
 ---
 
-### Example 4: Production Pipeline
+### Example 4: Production Pipeline with Observatory
 
 ```yaml
 # Production-ready configuration with monitoring
 
+name: "production_pipeline"
+
 broker:
+  enable_metrics: true
   history_size: 1000
-  history_ttl: 7200
+
+observatory:
+  enabled: true
+  port: 8765
 
 sources:
-  - type: mqtt
-    broker: "${MQTT_BROKER}"
-    topic: "sensors/#"
-    channel: "sensors.{topic}"
-    delivery_guarantee: "at-least-once"
-    retry_attempts: 5
-    dead_letter_channel: "_dlq.mqtt_failures"
+  - type: csv
+    label: "sensor_import"
+    channel: "sensors.temp"
+    params:
+      path: "/data/sensors.csv"
+      timestamp_column: "ts"
+      value_column: "reading"
+      tag_columns: ["location", "sensor_id"]
 
 transformations:
-  # Deduplication
-  - type: deduplication
-    input: "sensors.**"
-    output: "sensors.clean.**"
-    window: 60
+  # Filter out-of-range values
+  - type: filter
+    label: "range_filter"
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.valid"
+    params:
+      condition: "value >= 0 and value <= 200"
 
-  # Alerting
-  - type: threshold_alert
-    input: "sensors.clean.*.temperature"
-    threshold: 100
-    output: "alerts.critical.temperature"
+  # Compute averages
+  - type: aggregate
+    label: "temp_avg"
+    input_channels: "sensors.temp.valid"
+    output_channel: "sensors.temp.avg"
+    params:
+      window: 60
+      function: "mean"
 
 destinations:
-  # Production database
-  - type: database
-    connection_string: "${DATABASE_URL}"
-    channel: "sensors.clean.**"
-    buffer_size: 10000
-    retry_attempts: 3
-    dead_letter_channel: "_dlq.db_failures"
-
-  # Monitoring console
+  # Console for monitoring
   - type: console
-    channel: "alerts.**"
-    format: "pretty"
+    channel_pattern: "sensors.temp.avg"
+    params:
+      format: "pretty"
 
-  # Metrics monitoring
-  - type: console
-    channel: "_metrics.broker.**"
-    format: "compact"
-
-  # DLQ monitoring
-  - type: file
-    channel: "_dlq.**"
-    path: "/var/log/cod3s/dlq.log"
-
-logging:
-  level: "INFO"
-  format: "json"
-  include_timestamps: true
-  include_trace_ids: true
+  # Collect for analysis
+  - type: collect
+    label: "results"
+    channel_pattern: "sensors.temp.valid"
 ```
 
 ---
@@ -882,36 +815,38 @@ logging:
 ### Configuration Organization
 
 **Do:**
-- ✅ Use YAML for declarative pipelines
-- ✅ Use Python API for dynamic configuration
-- ✅ Use environment variables for secrets
-- ✅ Version control YAML files (git)
-- ✅ Validate before deployment
+- Use YAML for declarative pipelines
+- Use Python API for dynamic or complex configuration
+- Use environment variables for secrets and deployment overrides
+- Version control YAML files (git)
+- Validate before deployment (`cod3s-data validate`)
 
 **Don't:**
-- ❌ Hard-code secrets in YAML
-- ❌ Mix configuration methods unnecessarily
-- ❌ Skip validation step
+- Hard-code secrets in YAML
+- Mix configuration methods unnecessarily
+- Skip validation step
 
 ---
 
 ### Deployment
 
 **Do:**
-- ✅ Use different YAML files per environment (dev, staging, prod)
-- ✅ Use environment variables for environment-specific values
-- ✅ Test configuration in non-production first
-- ✅ Use configuration validation in CI/CD
+- Use different YAML files per environment (dev, staging, prod)
+- Use environment variables for environment-specific values
+- Test configuration in non-production first
+- Use configuration validation in CI/CD
 
 **Example:**
 ```bash
 # Development
-export CODS_CONFIG=config/dev.yaml
-export DATABASE_URL=postgresql://localhost/dev_db
+export COD3S_PIPELINE_NAME="dev"
+export COD3S_OBSERVATORY_ENABLED="true"
+cod3s-data run config/dev.yaml
 
 # Production
-export CODS_CONFIG=config/prod.yaml
-export DATABASE_URL=postgresql://prod-db/prod_db
+export COD3S_PIPELINE_NAME="production"
+export COD3S_BROKER_HISTORY_SIZE="1000"
+cod3s-data run config/prod.yaml
 ```
 
 ---
@@ -919,15 +854,15 @@ export DATABASE_URL=postgresql://prod-db/prod_db
 ### Security
 
 **Do:**
-- ✅ Use environment variables for secrets
-- ✅ Restrict file permissions (600 for configs with secrets)
-- ✅ Use secret management services (Vault, AWS Secrets Manager)
-- ✅ Audit configuration changes
+- Use environment variables for secrets
+- Restrict file permissions (600 for configs with secrets)
+- Use secret management services (Vault, AWS Secrets Manager)
+- Audit configuration changes
 
 **Don't:**
-- ❌ Commit secrets to git
-- ❌ Log configuration with secrets
-- ❌ Share production configs via insecure channels
+- Commit secrets to git
+- Log configuration with secrets
+- Share production configs via insecure channels
 
 ---
 
@@ -937,22 +872,22 @@ export DATABASE_URL=postgresql://prod-db/prod_db
 
 1. **Triple Configuration:**
    - YAML files (declarative)
-   - Python API (programmatic)
-   - Environment variables (runtime)
+   - Python API (programmatic via `PipelineConfig`)
+   - Environment variables (runtime via `COD3S_*`)
 
 2. **Hierarchy:**
-   - Python API > Env Vars > YAML > Defaults
+   - Env Vars > YAML / Python API > Defaults
 
 3. **Validation:**
-   - Type checking
-   - Required fields
-   - Value constraints
-   - CLI validation tool
+   - Pydantic v2 model validation
+   - Type checking for registered components
+   - Required fields (`type`, `channel`, `input_channels`, `output_channel`, `channel_pattern`)
+   - CLI validation tool (`cod3s-data validate`)
 
 4. **Best Practices:**
    - YAML for standard cases
    - Python for complex logic
-   - Environment variables for secrets
+   - Environment variables for secrets and deployment
    - Validate before deployment
 
 **Next:** Explore [Observability](10-OBSERVABILITY.md) for monitoring and debugging.
@@ -964,7 +899,3 @@ export DATABASE_URL=postgresql://prod-db/prod_db
 | Previous | Up | Next |
 |----------|-----|------|
 | [← 08-BROKER](08-BROKER.md) | [OVERVIEW](00-OVERVIEW.md) | [10-OBSERVABILITY →](10-OBSERVABILITY.md) |
-
----
-
-*This is a functional specification document. Implementation details will be defined in the technical specification phase.*

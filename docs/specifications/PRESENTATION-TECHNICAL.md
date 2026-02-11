@@ -213,7 +213,7 @@ graph TB
 - `CSVSource` - Read CSV files with headers
 
 **Key Features**:
-- Batch modes: BATCH (finite), REALTIME (continuous), TRANSPOSE (replay)
+- Batch modes: BATCH (finite), REALTIME (continuous), TRANSPOSE (planned V1.x)
 - Controllable: cancel, pause/resume, progress tracking
 - Configurable delivery: at-most-once (default), at-least-once
 
@@ -254,10 +254,9 @@ get_history(channel, count)      # Retrieve recent messages
 - Examples: Multi-sensor computations, aggregations
 
 **Framework Helpers**:
-- `self.latest` - Latest message per input channel
-- `TimeWindow(duration)` - Time-based windows
-- `CountWindow(size)` - Count-based windows
-- `Cache(ttl)` - Deduplication/caching
+- `self.state` - Dict for tracking state (latest values, counters, etc.)
+- `transform_with_state(message, state)` - Override in StatefulTransform
+- `AggregateTransform` - Built-in time/count window aggregation
 
 ---
 
@@ -343,13 +342,7 @@ id: "a3b7c9d1-..."                # Unique ID (auto-generated)
 - May deliver duplicates
 - Use case: Critical data (safety, compliance)
 
-```yaml
-source:
-  delivery_guarantee: "at-least-once"
-  retry_attempts: 3
-  retry_timeout: 5s
-  dead_letter_channel: "_dlq.failed"
-```
+**Note**: Delivery guarantees are configured at the broker level in V1.0, not per-source YAML fields.
 
 ---
 
@@ -367,7 +360,7 @@ source:
 **Implications**:
 - Messages may arrive out of order
 - Applications sort by timestamp if order matters
-- Stateful transformations: `self.latest` = most recently **arrived** (not latest timestamp)
+- Stateful transformations: `self.state` tracks most recently **arrived** (not latest timestamp)
 
 **Out-of-Order Handling**:
 - Default: Accept all (warn + emit metrics)
@@ -377,7 +370,7 @@ source:
 
 ## Timezone Handling
 
-### Accept Any, Normalize to UTC
+### Accept Timezone-Aware, Normalize to UTC
 
 **Accepted Formats** (ISO 8601):
 ```python
@@ -385,13 +378,14 @@ source:
 "2024-01-15T10:00:00+00:00"      # UTC explicit offset
 "2024-01-15T11:00:00+01:00"      # Paris time (CET)
 "2024-01-15T04:00:00-05:00"      # New York time (EST)
-"2024-01-15T10:00:00"            # No timezone → UTC (warning)
+"2024-01-15T10:00:00"            # No timezone → REJECTED (ValueError)
 ```
 
 **Normalization**:
 - All timestamps converted to UTC internally
 - Original timezone NOT preserved
 - Transformations receive UTC timestamps
+- Naive (no timezone) timestamps are **rejected with ValueError**
 
 ---
 
@@ -447,7 +441,7 @@ sources:
 
 destinations:
   - type: database
-    channel: "sensors.temp"
+    channel_pattern: "sensors.temp"
 ```
 
 ---
@@ -462,17 +456,17 @@ sources:
     channel: "sensors.temp"
 
 transformations:
-  - type: threshold_alert
-    input: "sensors.temp"
-    threshold: 240
-    output: "alerts.critical"
-    pass_through: true  # Also forward original
+  - type: filter
+    input_channels: "sensors.temp"
+    output_channel: "alerts.critical"
+    params:
+      predicate: "value > 240"
 
 destinations:
   - type: console
-    channel: "alerts.critical"
+    channel_pattern: "alerts.critical"
   - type: database
-    channel: "sensors.temp"
+    channel_pattern: "sensors.temp"
 ```
 
 **Result**: Original data to DB, alerts to console
@@ -485,51 +479,51 @@ destinations:
 
 ```python
 class ViscosityComputer(StatefulTransform):
-    input_channels = ["sensors.temp", "sensors.speed", "sensors.force"]
-    output_channel = "indicators.viscosity"
-
-    def transform(self, message):
-        # self.latest managed by framework
-        if len(self.latest) < 3:
-            return []  # Wait for all sensors
+    async def transform_with_state(self, message, state):
+        state[message.key] = message  # Track latest per key
+        if len(state) < 3:
+            return None  # Wait for all sensors
 
         viscosity = compute_viscosity(
-            self.latest["sensors.temp"].value,
-            self.latest["sensors.speed"].value,
-            self.latest["sensors.force"].value
+            state["sensors.temp"].value,
+            state["sensors.speed"].value,
+            state["sensors.force"].value,
         )
 
-        return [Message(key="viscosity", value=viscosity)]
+        return Message(key="viscosity", value=viscosity, ...)
 ```
 
 ---
 
 ## Pattern 4: Transformation Chain
 
-**Use Case**: Raw → Dedup → Unit Convert → Storage
+**Use Case**: Raw → Filter → Map → Storage
 
 ```yaml
 sources:
   - type: mqtt
     channel: "sensors.temp.raw"
-    delivery_guarantee: "at-least-once"  # May duplicate
 
 transformations:
-  - type: deduplication
-    input: "sensors.temp.raw"
-    output: "sensors.temp.deduped"
-    window: 60s
+  - type: filter
+    input_channels: "sensors.temp.raw"
+    output_channel: "sensors.temp.valid"
+    params:
+      predicate: "value is not None"
 
-  - type: unit_conversion
-    input: "sensors.temp.deduped"
-    output: "sensors.temp.celsius"
-    from_unit: "fahrenheit"
-    to_unit: "celsius"
+  - type: map
+    input_channels: "sensors.temp.valid"
+    output_channel: "sensors.temp.celsius"
+    params:
+      expression: "(value - 32) * 5 / 9"
 
 destinations:
   - type: database
-    channel: "sensors.temp.celsius"
+    channel_pattern: "sensors.temp.celsius"
 ```
+
+> **Note**: Deduplication and unit_conversion transforms are **Planned (V1.x)**.
+> V1.0 provides `filter`, `map`, and `aggregate` built-in transforms.
 
 ---
 
@@ -544,14 +538,15 @@ sources:
 
 destinations:
   - type: console
-    channel: "sensors.temp"
+    channel_pattern: "sensors.temp"
 
   - type: database
-    channel: "sensors.temp"
+    channel_pattern: "sensors.temp"
 
   - type: file
-    channel: "sensors.temp"
-    path: "sensor_data.log"
+    channel_pattern: "sensors.temp"
+    params:
+      path: "sensor_data.log"
 ```
 
 **Result**: Same message delivered to all subscribed destinations
@@ -575,7 +570,7 @@ sources:
 
 destinations:
   - type: console
-    channel: "sensors.**"
+    channel_pattern: "sensors.**"
 ```
 
 ### 2. Python API (Programmatic)
@@ -583,10 +578,12 @@ destinations:
 **Best for**: Dynamic configuration, advanced use cases
 
 ```python
-framework = Framework()
-framework.add_source(type="mqtt", channel="sensors.temp")
-framework.add_destination(ConsoleDestination(channel="sensors.**"))
-framework.start()
+config = PipelineConfig(
+    sources=[SourceConfig(type="random", channel="sensors.temp", params={"rate": 1})],
+    destinations=[DestinationConfig(type="console", channel_pattern="sensors.**")],
+)
+async with Framework(config) as framework:
+    await framework.run()
 ```
 
 ---
@@ -598,11 +595,12 @@ framework.start()
 **Best for**: Deployment-specific overrides (dev/staging/prod)
 
 ```bash
-export CODS_BROKER_HOST=redis://prod-broker:6379
-export CODS_DB_CONNECTION=postgresql://prod-db/sensor_data
-export CODS_LOG_LEVEL=INFO
+export COD3S_BROKER_HISTORY_SIZE=500
+export COD3S_BROKER_ENABLE_METRICS=true
+export COD3S_OBSERVATORY_ENABLED=true
+export COD3S_PIPELINE_NAME=prod_pipeline
 
-cod3s-data --config pipeline.yaml
+cod3s-data run pipeline.yaml
 ```
 
 ### Configuration Hierarchy (Precedence)
@@ -623,48 +621,50 @@ Framework Defaults (lowest)
 
 ```yaml
 # pipeline.yaml
+name: "printer_monitoring"
+
 broker:
-  type: "in_memory"
-  buffer_size: 1000
-  reject_out_of_order: false
+  enable_metrics: true
+  history_size: 200
+
+plugins:
+  - my_project.custom_transforms
 
 sources:
-  - name: temp_sensor
-    type: mqtt
-    broker: "mqtt://localhost:1883"
-    topic: "sensors/+/temperature"
-    channel: "sensors.{device_id}.temperature"
-    delivery_guarantee: "at-least-once"
+  - label: temp_sensor
+    type: random
+    channel: "sensors.temperature"
+    params:
+      rate: 10
+      min_value: 180
+      max_value: 260
 
 transformations:
-  - name: high_temp_alert
-    type: threshold_alert
-    input: "sensors.*.temperature"
-    threshold: 250
-    output: "alerts.critical.temperature"
+  - label: high_temp_alert
+    type: filter
+    input_channels: "sensors.temperature"
+    output_channel: "alerts.critical.temperature"
+    params:
+      predicate: "value > 250"
 
-  - name: viscosity_compute
-    type: custom_python
-    class: ViscosityComputer
-    inputs:
-      - "sensors.{id}.temperature"
-      - "sensors.{id}.speed"
-      - "sensors.{id}.force"
-    output: "indicators.{id}.viscosity"
+  - label: viscosity_compute
+    type: viscosity_computer  # Custom plugin-based transform
+    input_channels:
+      - "sensors.temperature"
+      - "sensors.speed"
+      - "sensors.force"
+    output_channel: "indicators.viscosity"
 
 destinations:
-  - name: console_alerts
+  - label: console_alerts
     type: console
-    channel: "alerts.**"
-    format: "json"
+    channel_pattern: "alerts.**"
 
-  - name: database_storage
-    type: influxdb
-    channel: "sensors.**"
-    host: "localhost:8086"
-    database: "sensor_data"
-    retry_attempts: 3
-    buffer_size: 10000
+  - label: file_storage
+    type: file
+    channel_pattern: "sensors.**"
+    params:
+      path: "sensor_data.jsonl"
 ```
 
 ---
@@ -705,19 +705,22 @@ _metrics.dlq.message_count
 # Monitor all metrics
 destinations:
   - type: console
-    channel: "_metrics.**"
+    channel_pattern: "_metrics.**"
 
 # Monitor specific metrics
 destinations:
-  - type: influxdb
-    channel: "_metrics.broker.**"
+  - type: file
+    channel_pattern: "_metrics.broker.**"
+    params:
+      path: "metrics.jsonl"
 
 # Alert on high DLQ count
 transformations:
-  - type: threshold_alert
-    input: "_metrics.dlq.message_count"
-    threshold: 100
-    output: "alerts.operations.high_dlq"
+  - type: filter
+    input_channels: "_metrics.dlq.message_count"
+    output_channel: "alerts.operations.high_dlq"
+    params:
+      predicate: "value > 100"
 ```
 
 **Metrics Message Structure**:
@@ -762,12 +765,12 @@ tags:
 
 ### Enhanced Visibility
 
-**Enable Debug Mode**:
+**Enable Debug Mode** (via Observatory):
 ```yaml
-broker:
-  debug_mode: true
-  debug_channels:
-    - "sensors.printer1.**"
+observatory:
+  enabled: true
+  debug:
+    enabled: true
 ```
 
 **Debug Output**:
@@ -792,17 +795,20 @@ broker:
 **Use Case**: Integrate into existing Python application
 
 ```python
-from cod3s_data import Framework, ConsoleDestination
+import asyncio
+from cod3s_data.config.models import PipelineConfig, SourceConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-framework = Framework()
-framework.add_source(type="mqtt", channel="sensors.temp")
-framework.add_destination(ConsoleDestination(channel="sensors.**"))
-framework.start()
+config = PipelineConfig(
+    sources=[SourceConfig(type="random", channel="sensors.temp", params={"rate": 1})],
+    destinations=[DestinationConfig(type="console", channel_pattern="sensors.**")],
+)
 
-# Your application continues running
-while True:
-    # Your application logic
-    pass
+async def main():
+    async with Framework(config) as framework:
+        await framework.run()
+
+asyncio.run(main())
 ```
 
 **Benefits**: Minimal overhead, direct API access, easy debugging
@@ -818,11 +824,10 @@ while True:
 
 ```bash
 # Start with YAML configuration
-cod3s-data --config pipeline.yaml
+cod3s-data run pipeline.yaml
 
-# Or with environment variables
-export CODS_CONFIG=/etc/cod3s/pipeline.yaml
-cod3s-data
+# With Observatory enabled
+cod3s-data run pipeline.yaml --observatory
 ```
 
 **Systemd Service**:
@@ -833,7 +838,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cod3s-data --config /etc/cod3s/pipeline.yaml
+ExecStart=/usr/local/bin/cod3s-data run /etc/cod3s/pipeline.yaml
 Restart=always
 
 [Install]
@@ -852,17 +857,17 @@ WantedBy=multi-user.target
 **Use Case**: Command-line operations (testing, batch processing)
 
 ```bash
-# Run one-off batch import
-cod3s-data run --source csv --file data.csv --destination database
+# Run a pipeline from YAML configuration
+cod3s-data run pipeline.yaml
 
-# Test configuration
-cod3s-data test --config pipeline.yaml
+# Run with Observatory web UI
+cod3s-data run pipeline.yaml --observatory
 
-# Validate configuration
-cod3s-data validate --config pipeline.yaml
+# Run in interactive mode (pipeline waits for UI to start it)
+cod3s-data run pipeline.yaml --interactive
 
-# Monitor running pipeline
-cod3s-data monitor --metrics-channel "_metrics.**"
+# Validate configuration without running
+cod3s-data validate pipeline.yaml
 ```
 
 **Benefits**: Quick ad-hoc tasks, scripting, testing
@@ -907,9 +912,11 @@ cod3s-data monitor --metrics-channel "_metrics.**"
 sources:
   - type: random
     channel: "test.random.temp"
-    value_range: [0, 100]
-    rate: 10  # messages per second
-    duration: 60  # run for 60 seconds
+    params:
+      min_value: 0
+      max_value: 100
+      rate: 10  # messages per second
+      max_messages: 600  # stop after 600 messages
 ```
 
 **SequenceSource**:
@@ -917,9 +924,10 @@ sources:
 sources:
   - type: sequence
     channel: "test.sequence"
-    start: 1
-    end: 1000
-    step: 1
+    params:
+      start_value: 1
+      end_value: 1000
+      step_value: 1
 ```
 
 **Use Case**: Validate transformations and destinations without real sensors
@@ -928,7 +936,10 @@ sources:
 
 ## Record/Replay Testing
 
-### TRANSPOSE Mode
+### TRANSPOSE Mode (**Planned V1.x**)
+
+> **Note**: TRANSPOSE mode is planned for a future V1.x release.
+> V1.0 supports CSV in BATCH mode for replaying recorded data.
 
 **Record Production Data**:
 ```yaml
@@ -939,25 +950,23 @@ sources:
 
 destinations:
   - type: file
-    channel: "sensors.temp"
-    path: "recorded_data.jsonl"  # JSONL format
+    channel_pattern: "sensors.temp"
+    params:
+      path: "recorded_data.jsonl"  # JSONL format
 ```
 
-**Replay for Testing**:
+**Replay for Testing (BATCH mode, V1.0)**:
 ```yaml
 # Test pipeline
 sources:
-  - type: file
+  - type: csv
     channel: "sensors.temp"
-    path: "recorded_data.jsonl"
-    mode: TRANSPOSE  # Replay with original timestamps
-
-transformations:
-  - type: custom_python  # Your transformation to test
+    params:
+      path: "recorded_data.csv"
 
 destinations:
-  - type: collect  # CollectDestination for assertions
-    channel: "output.**"
+  - type: collect
+    channel_pattern: "output.**"
 ```
 
 ---
@@ -967,28 +976,29 @@ destinations:
 ### CollectDestination for Assertions
 
 ```python
-# test_viscosity_computation.py
+# test_pipeline.py
 import pytest
-from cod3s_data import Framework, CollectDestination
+from cod3s_data.config.models import PipelineConfig, SourceConfig, DestinationConfig
+from cod3s_data.framework import Framework
 
-def test_viscosity_computation():
-    framework = Framework()
+@pytest.mark.asyncio
+async def test_pipeline():
+    config = PipelineConfig(
+        sources=[SourceConfig(
+            type="sequence", channel="sensors.temp",
+            params={"start_value": 1, "end_value": 101},
+        )],
+        destinations=[DestinationConfig(
+            type="collect", channel_pattern="sensors.temp",
+        )],
+    )
+    async with Framework(config) as fw:
+        await fw.run()
 
-    # Set up pipeline
-    framework.add_source(type="sequence", channel="sensors.temp", ...)
-    framework.add_transformation(ViscosityComputer, ...)
-
-    # Collect output for assertions
-    collector = CollectDestination(channel="indicators.viscosity")
-    framework.add_destination(collector)
-
-    # Run pipeline
-    framework.run_until_complete(timeout=10)
-
-    # Assertions
+    # Access collector via fw.destinations[0]
+    collector = fw.destinations[0]
     assert len(collector.messages) == 100
     assert all(m.value > 0 for m in collector.messages)
-    assert collector.messages[0].key == "viscosity"
 ```
 
 ---
@@ -999,26 +1009,35 @@ def test_viscosity_computation():
 
 1. **Unit Tests**: Individual transformations
    ```python
-   def test_threshold_alert():
-       transform = ThresholdAlert(threshold=100)
-       result = transform.transform(Message(value=150))
-       assert len(result) == 2  # Original + alert
+   async def test_filter_transform():
+       # Test transform logic directly
+       msg = Message(key="temp", timestamp=now_utc(), value=150)
+       result = await transform.transform(msg)
+       assert result is not None
    ```
 
 2. **Integration Tests**: Full pipelines with test sources
    ```python
-   def test_pipeline():
-       framework = setup_pipeline()
-       collector = CollectDestination(channel="output")
-       framework.run_until_complete()
-       assert_expected_output(collector.messages)
+   async def test_pipeline():
+       config = PipelineConfig(
+           sources=[SourceConfig(type="sequence", ...)],
+           destinations=[DestinationConfig(type="collect", ...)],
+       )
+       async with Framework(config) as fw:
+           await fw.run()
+       assert len(fw.destinations[0].messages) > 0
    ```
 
-3. **Record/Replay Tests**: Test with production data
+3. **CSV Replay Tests**: Test with recorded data
    ```python
-   def test_with_production_data():
-       framework = setup_with_recorded_data()
-       framework.run_and_compare_to_baseline()
+   async def test_with_recorded_data():
+       config = PipelineConfig(
+           sources=[SourceConfig(type="csv", channel="sensors.temp",
+               params={"path": "recorded.csv"})],
+           destinations=[DestinationConfig(type="collect", ...)],
+       )
+       async with Framework(config) as fw:
+           await fw.run()
    ```
 
 ---
@@ -1032,22 +1051,22 @@ def test_viscosity_computation():
 ### Included Features
 
 ✅ **Core Framework**:
-- In-memory message broker
+- In-memory message broker with metrics and history
 - Hierarchical channel routing with wildcards
-- Configurable delivery guarantees (at-most-once, at-least-once)
-- Retry logic with Dead Letter Queue
-- Backpressure handling with bounded buffers
+- Advisory delivery guarantees (at-most-once, at-least-once)
+- Plugin system for custom components
 
 ✅ **Components**:
 - Sources: Random, Sequence, File, CSV
-- Transformations: Stateless, Stateful, Custom Python
+- Transformations: Filter, Map, Aggregate, Stateless, Stateful
 - Destinations: Console, File, InMemory/Collect
 
 ✅ **Operations**:
-- YAML + Python + Environment variable configuration
-- Metrics as messages (_metrics.* channels)
+- YAML + Python API + `COD3S_*` environment variable configuration
+- CLI tool (`cod3s-data run`, `cod3s-data validate`)
+- Observatory web UI for debugging and monitoring
+- Metrics as messages (`_metrics.*` channels)
 - Structured logging with trace IDs
-- Debug mode
 
 ---
 
@@ -1112,7 +1131,7 @@ def test_viscosity_computation():
 
 ### Technology Choices
 
-**Language**: Python 3.9+
+**Language**: Python 3.12+
 - Wide adoption in industrial/IoT
 - Easy to extend (custom sources/transformations)
 - Rich ecosystem (MQTT, databases, HTTP)
@@ -1152,7 +1171,7 @@ def test_viscosity_computation():
    ```yaml
    destinations:
      - type: console
-       channel: "_metrics.**.latency"
+       channel_pattern: "_metrics.**.latency"
    ```
 
 ---
@@ -1161,24 +1180,22 @@ def test_viscosity_computation():
 
 ### Adding Custom Components
 
-**Custom Source** (~50 lines):
+**Custom Source** (implement `produce()` generator):
 ```python
-from cod3s_data import Source, Message
+import asyncio
+from datetime import datetime, timezone
+from cod3s_data.sources.base import Source
+from cod3s_data.core.message import Message
 
 class MyCustomSource(Source):
-    def __init__(self, channel, config):
-        super().__init__(channel)
-        self.config = config
-
-    async def run(self):
-        while not self.should_stop:
-            # Fetch data from your system
+    async def produce(self):
+        while True:
             data = await self.fetch_data()
-
-            # Publish message
-            message = Message(key="my_key", value=data, timestamp=now())
-            await self.publish(message)
-
+            yield Message(
+                key="my_key",
+                value=data,
+                timestamp=datetime.now(timezone.utc),
+            )
             await asyncio.sleep(1)
 
     async def fetch_data(self):
@@ -1186,12 +1203,15 @@ class MyCustomSource(Source):
         return 42
 ```
 
-**Register and Use**:
+**Register via Plugin and Use**:
 ```yaml
+plugins:
+  - my_project.custom_sources
+
 sources:
   - type: my_custom_source
     channel: "custom.data"
-    config:
+    params:
       param1: "value1"
 ```
 
@@ -1202,30 +1222,37 @@ sources:
 ### Custom Transformation
 
 ```python
-from cod3s_data import StatelessTransform, Message
+from cod3s_data.transformations.base import Transformation
+from cod3s_data.core.message import Message
+from datetime import datetime, timezone
 
-class MyTransform(StatelessTransform):
-    def __init__(self, threshold):
+class MyTransform(Transformation):
+    def __init__(self, broker, input_channels, output_channel, threshold=100):
+        super().__init__(broker, input_channels, output_channel)
         self.threshold = threshold
 
-    def transform(self, message):
+    async def transform(self, message):
         if message.value > self.threshold:
-            # Return alert + original
             alert = Message(
                 key="alert",
                 value=f"High value: {message.value}",
-                timestamp=message.timestamp
+                timestamp=datetime.now(timezone.utc),
             )
             return [message, alert]
         return [message]
 ```
 
-**Use in Configuration**:
+**Register via Plugin and Use**:
 ```yaml
+plugins:
+  - my_project.custom_transforms
+
 transformations:
   - type: my_transform
-    input: "sensors.temp"
-    threshold: 100
+    input_channels: "sensors.temp"
+    output_channel: "alerts.temp"
+    params:
+      threshold: 100
 ```
 
 ---
@@ -1281,24 +1308,26 @@ transformations:
 
 ### Debugging Tips
 
-1. **Enable Debug Mode**:
+1. **Enable Observatory Debug Mode**:
    ```yaml
-   broker:
-     debug_mode: true
+   observatory:
+     enabled: true
+     debug:
+       enabled: true
    ```
 
 2. **Subscribe to All Metrics**:
    ```yaml
    destinations:
      - type: console
-       channel: "_metrics.**"
+       channel_pattern: "_metrics.**"
    ```
 
 3. **Monitor DLQ**:
    ```yaml
    destinations:
      - type: console
-       channel: "_dlq.**"
+       channel_pattern: "_dlq.**"
    ```
 
 4. **Use Trace IDs**: Grep logs for specific message flow
@@ -1346,7 +1375,7 @@ transformations:
    - Common data flow patterns
 
 3. **Prototype and Experiment**
-   - Implement reference implementation (Python 3.9+)
+   - Implement reference implementation (Python 3.12+)
    - Validate performance targets
    - Build example applications
 

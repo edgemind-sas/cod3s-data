@@ -231,64 +231,63 @@ transformations:
 **Use Case:** Compute viscosity from temperature, speed, and force sensors
 
 ```python
-from cod3s_data import StatefulTransform, Message
+from cod3s_data.transformations.base import StatefulTransform
+from cod3s_data.core.message import Message
+from typing import Any
 
 class ViscosityComputer(StatefulTransform):
-    """Stateful transformation consuming from 3 channels"""
+    """Stateful transformation consuming from 3 channels.
 
-    # Declare input channels
-    input_channels = [
-        "sensors.{id}.temperature",
-        "sensors.{id}.speed",
-        "sensors.{id}.force"
-    ]
+    Uses self.state (dict) to track latest values per channel.
+    The state dict is user-managed inside transform_with_state().
+    """
 
-    # Single output channel
-    output_channel = "indicators.{id}.viscosity"
-
-    def transform(self, message: Message) -> List[Message]:
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
         """
-        Called on EACH message from ANY input channel
+        Called on EACH message from ANY input channel.
+        Access is serialized via an asyncio.Lock (thread-safe).
 
-        self.latest: Dict[channel, Message] - latest message per channel
-                     (framework-managed, automatically updated)
+        Args:
+            message: The incoming message
+            state: Mutable dict persisted across calls (self.state)
         """
+        # Track latest value by channel/key
+        state[message.key] = message.value
 
         # Wait until all sensors have data
-        if len(self.latest) < 3:
-            return []  # Not ready yet
-
-        # Extract latest values
-        temp = self.latest["sensors.{id}.temperature"].value
-        speed = self.latest["sensors.{id}.speed"].value
-        force = self.latest["sensors.{id}.force"].value
+        required = {"temperature", "speed", "force"}
+        if not required.issubset(state.keys()):
+            return None  # Not ready yet
 
         # Compute derived metric
-        viscosity = self.compute_viscosity(temp, speed, force)
+        temp = state["temperature"]
+        speed = state["speed"]
+        force = state["force"]
+        viscosity = force / (speed * (1 + 0.01 * (temp - 20)))
 
-        # Return result
-        return [Message(
+        return Message(
             key="viscosity",
-            timestamp=message.timestamp,  # Use triggering message timestamp
+            timestamp=message.timestamp,
             value=viscosity,
-            tags=message.tags
-        )]
-
-    def compute_viscosity(self, temp, speed, force):
-        # Simplified physics formula
-        return force / (speed * (1 + 0.01 * (temp - 20)))
+            tags=message.tags,
+        )
 ```
 
-**Configuration:**
+**Configuration (via plugin):**
 ```yaml
+plugins:
+  - my_transforms_plugin
+
 transformations:
-  - type: custom_python
-    class: ViscosityComputer
-    inputs:
+  - type: viscosity_computer
+    input_channels:
       - "sensors.printer1.temperature"
       - "sensors.printer1.speed"
       - "sensors.printer1.force"
-    output: "indicators.printer1.viscosity"
+    output_channel: "indicators.printer1.viscosity"
+    params: {}
 ```
 
 ---
@@ -300,189 +299,127 @@ sequenceDiagram
     participant Chan1 as Channel 1<br/>sensors.temp
     participant Chan2 as Channel 2<br/>sensors.speed
     participant Transform
-    participant State as self.latest
+    participant State as self.state (dict)
 
-    Chan1->>Transform: message@10:00:01 (temp=230)
-    Transform->>State: Update latest[Chan1] = msg
-    Transform->>Transform: Check: len(latest) = 1 < 2
-    Transform->>Transform: Return [] (wait for Chan2)
+    Chan1->>Transform: message (key=temperature, value=230)
+    Transform->>State: state["temperature"] = 230
+    Transform->>Transform: Check: missing "speed", "force"
+    Transform->>Transform: Return None (wait)
 
-    Chan2->>Transform: message@10:00:02 (speed=45)
-    Transform->>State: Update latest[Chan2] = msg
-    Transform->>Transform: Check: len(latest) = 2 ✓
-    Transform->>Transform: Compute result
-    Transform->>Broker: Publish result
+    Chan2->>Transform: message (key=speed, value=45)
+    Transform->>State: state["speed"] = 45
+    Transform->>Transform: Check: missing "force"
+    Transform->>Transform: Return None (wait)
 
-    Chan1->>Transform: message@10:00:03 (temp=231)
-    Transform->>State: Update latest[Chan1] = new msg
-    Transform->>Transform: Compute result (with new temp)
-    Transform->>Broker: Publish result
+    Note over Transform: ...force message arrives...
+    Transform->>State: state["force"] = 12.5
+    Transform->>Transform: All keys present, compute result
+    Transform->>Broker: Publish viscosity message
 ```
 
 ---
 
 ## Framework State Helpers
 
-### self.latest - Latest Values
+### self.state - Stateful Transform State Dict
 
-**Purpose:** Track most recent message per input channel
+**Purpose:** Mutable dictionary for tracking state across messages in `StatefulTransform`
 
-**Provided By:** Framework (automatic)
-
-**Type:** `Dict[channel_name: str, message: Message]`
+**Type:** `dict[str, Any]` (initialized as empty `{}`)
 
 **Behavior:**
-- Automatically updated on each message
-- One entry per input channel
-- Overwritten on new message (not a history)
+- User-managed inside `transform_with_state(message, state)`
+- Access is serialized via `asyncio.Lock` (thread-safe)
+- Persists for the lifetime of the transform
 
 **Example:**
 ```python
+from cod3s_data.transformations.base import StatefulTransform
+from cod3s_data.core.message import Message
+from typing import Any
+
 class MultiSensorTransform(StatefulTransform):
-    input_channels = ["sensors.temp", "sensors.pressure"]
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        # Track latest value per key in state dict
+        state[message.key] = message.value
 
-    def transform(self, message):
-        # self.latest automatically maintained by framework
-        # self.latest = {
-        #     "sensors.temp": Message(...),      # Most recent temp
-        #     "sensors.pressure": Message(...)   # Most recent pressure
-        # }
+        if "temperature" not in state or "pressure" not in state:
+            return None  # Wait for both sensors
 
-        if len(self.latest) < 2:
-            return []  # Wait for both sensors
-
-        temp = self.latest["sensors.temp"].value
-        pressure = self.latest["sensors.pressure"].value
-
-        result = compute(temp, pressure)
-        return [Message(key="result", value=result)]
+        result = compute(state["temperature"], state["pressure"])
+        return Message(
+            key="result",
+            timestamp=message.timestamp,
+            value=result,
+        )
 ```
+
+> **Tip:** Use the buffer helpers below (`Latest`, `TimeWindow`, `CountWindow`, `Cache`) inside your `transform_with_state()` for common patterns.
 
 ---
 
-### TimeWindow - Time-Based Aggregation
+### Buffer Helpers
 
-**Purpose:** Collect messages within time windows (e.g., 5-minute averages)
+These structures from `cod3s_data.core.buffers` can be stored in `self.state` or as instance attributes on custom transforms.
 
-**API:**
+#### Latest - Track Latest Per Channel
+
 ```python
-from cod3s_data import TimeWindow
+from cod3s_data.core.buffers import Latest
 
-class TemperatureAggregator(StatefulTransform):
-    def __init__(self, window_duration=300):  # 5 minutes
-        self.window = TimeWindow(duration=window_duration)
+# In your transform __init__:
+self.latest = Latest()
 
-    def transform(self, message):
-        # Add message to current window
-        self.window.add(message)
-
-        # Check if window is complete
-        if self.window.is_complete():
-            messages = self.window.get_messages()
-
-            # Compute aggregate
-            avg_temp = sum(m.value for m in messages) / len(messages)
-            max_temp = max(m.value for m in messages)
-            min_temp = min(m.value for m in messages)
-
-            # Start new window
-            self.window.reset()
-
-            return [Message(
-                key="temp_avg_5min",
-                timestamp=messages[-1].timestamp,
-                value=avg_temp,
-                tags={"max": max_temp, "min": min_temp}
-            )]
-
-        return []  # Window not complete yet
+# In transform_with_state:
+self.latest.update(message.key, message)
+if self.latest.has_all(["temperature", "pressure"]):
+    temp = self.latest.get("temperature").value
+    ...
 ```
 
-**Configuration:**
-```yaml
-transformations:
-  - type: time_aggregator
-    input: "sensors.temp"
-    output: "sensors.temp.5min_avg"
-    window_duration: 300  # 5 minutes
-    aggregation: "average"
-```
+#### TimeWindow - Time-Based Aggregation
 
----
-
-### CountWindow - Count-Based Aggregation
-
-**Purpose:** Collect N messages before processing
-
-**API:**
 ```python
-from cod3s_data import CountWindow
+from datetime import timedelta
+from cod3s_data.core.buffers import TimeWindow
 
-class MovingAverage(StatefulTransform):
-    def __init__(self, window_size=10):
-        self.window = CountWindow(size=window_size)
+# Keep messages from the last 5 minutes
+window = TimeWindow(duration=timedelta(minutes=5))
+window.add(message)
 
-    def transform(self, message):
-        self.window.add(message)
-
-        if self.window.is_full():
-            messages = self.window.get_messages()
-            avg = sum(m.value for m in messages) / len(messages)
-
-            # Slide window (remove oldest, keep recent)
-            self.window.slide()
-
-            return [Message(key="moving_avg", value=avg)]
-
-        return []
+messages = window.all()       # All messages in window
+values = window.values()      # Extracted values
+avg = sum(values) / len(values) if values else 0
 ```
 
-**Configuration:**
-```yaml
-transformations:
-  - type: moving_average
-    input: "sensors.temp"
-    output: "sensors.temp.ma10"
-    window_size: 10
-```
+#### CountWindow - Count-Based Aggregation
 
----
-
-### Cache - Deduplication and Caching
-
-**Purpose:** Remember recent messages for deduplication or lookup
-
-**API:**
 ```python
-from cod3s_data import Cache
+from cod3s_data.core.buffers import CountWindow
 
-class Deduplication(StatefulTransform):
-    def __init__(self, ttl=60):  # 60 second cache
-        self.cache = Cache(ttl=ttl)
+# Keep last 10 messages
+window = CountWindow(max_count=10)
+window.add(message)
 
-    def transform(self, message):
-        # Generate deduplication key
-        dedup_key = (message.key, message.timestamp)
-
-        if dedup_key in self.cache:
-            # Duplicate - filter out
-            return []
-
-        # First occurrence - add to cache and pass through
-        self.cache.add(dedup_key, message)
-        return [message]
+if window.is_full():
+    values = window.values()
+    avg = sum(values) / len(values)
 ```
 
-**Configuration:**
-```yaml
-transformations:
-  - type: deduplication
-    input: "sensors.temp.raw"
-    output: "sensors.temp.clean"
-    window: 60  # Deduplicate within 60 seconds
-```
+#### Cache - Deduplication and Caching
 
-**See:** [03-MESSAGES.md#duplicate-detection](03-MESSAGES.md#duplicate-detection)
+```python
+from datetime import timedelta
+from cod3s_data.core.buffers import Cache
+
+# Cache with 60-second TTL
+cache = Cache(ttl=timedelta(seconds=60))
+cache.set("my_key", some_value)
+cache.get("my_key")   # None if expired
+cache.has("my_key")   # bool
+```
 
 ---
 
@@ -627,18 +564,25 @@ class Sampler(StatefulTransform):
 
 ## Built-In Transformations
 
-### V1.0 Catalog
+### V1.0 Implemented
 
-| Transformation | Type | Purpose | Parameters |
-|----------------|------|---------|------------|
-| **Filter** | Stateless | Drop messages outside range | `min_value`, `max_value` |
-| **ThresholdAlert** | Stateless | Alert on threshold exceeded | `threshold`, `severity` |
-| **UnitConversion** | Stateless | Convert units | `from_unit`, `to_unit` |
-| **Deduplication** | Stateful | Remove duplicates | `window`, `strategy` |
-| **TimeAggregator** | Stateful | Time-based aggregation | `window_duration`, `aggregation` |
-| **MovingAverage** | Stateful | Sliding window average | `window_size` |
-| **Sampler** | Stateless | Downsample data | `sample_rate` |
-| **RateLimiter** | Stateful | Throttle message rate | `max_rate` |
+| Transformation | Type | Purpose | YAML `type` | Key Parameters |
+|----------------|------|---------|-------------|----------------|
+| **FilterTransform** | Stateless | Drop messages by predicate | `filter` | `predicate_code` |
+| **MapTransform** | Stateless | Transform message values | `map` | `map_fn_code` |
+| **AggregateTransform** | Stateful | Aggregate over windows | `aggregate` | `window_type`, `window_size`, `aggregation_fn_code` |
+
+### Planned (V1.x)
+
+The following transformations are described in this specification but **not yet implemented**. See [13-FUTURE](13-FUTURE-V2-V3.md).
+
+| Transformation | Type | Purpose |
+|----------------|------|---------|
+| **DeduplicationTransform** | Stateful | Remove duplicate messages |
+| **ThresholdAlert** | Stateless | Alert on threshold exceeded |
+| **UnitConversion** | Stateless | Convert units |
+| **Sampler** | Stateless | Downsample data |
+| **RateLimiter** | Stateful | Throttle message rate |
 
 ---
 
@@ -647,46 +591,44 @@ class Sampler(StatefulTransform):
 ### Stateless Transformation Template
 
 ```python
-from cod3s_data import StatelessTransform, Message
-from typing import List
+from cod3s_data.transformations.base import StatelessTransform
+from cod3s_data.broker.base import Broker
+from cod3s_data.core.message import Message
+from typing import Callable
 
 class MyTransform(StatelessTransform):
-    """Custom stateless transformation"""
+    """Custom stateless transformation.
 
-    def __init__(self, param1, param2):
-        """Initialize with configuration parameters"""
-        super().__init__()
-        self.param1 = param1
-        self.param2 = param2
+    StatelessTransform takes a transform_fn callable in its constructor.
+    For custom logic, subclass Transformation directly and implement transform().
+    """
+    pass
 
-    def transform(self, message: Message) -> List[Message]:
-        """
-        Process single message
+# Using StatelessTransform with a lambda/function:
+transform = StatelessTransform(
+    broker=broker,
+    input_channels="input",
+    output_channel="output",
+    transform_fn=lambda msg: msg.with_value(msg.value * 2) if msg.value > 10 else None,
+)
+```
 
-        Args:
-            message: Input message
+For more complex logic, subclass `Transformation` directly:
 
-        Returns:
-            List of output messages (0, 1, or N)
-        """
-        # Process message
-        result = self.process(message)
+```python
+from cod3s_data.transformations.base import Transformation
+from cod3s_data.core.message import Message
 
-        if result is not None:
-            return [result]
-        else:
-            return []
+class MyCustomTransform(Transformation):
+    def __init__(self, broker, input_channels, output_channel, threshold=10.0, multiplier=2.0):
+        super().__init__(broker, input_channels, output_channel)
+        self.threshold = threshold
+        self.multiplier = multiplier
 
-    def process(self, message):
-        # Your business logic
-        if message.value > self.param1:
-            return Message(
-                key=message.key,
-                timestamp=message.timestamp,
-                value=message.value * self.param2,
-                tags=message.tags
-            )
-        return None
+    async def transform(self, message: Message) -> Message | list[Message] | None:
+        if message.value > self.threshold:
+            return message.with_value(message.value * self.multiplier)
+        return None  # Filter out
 ```
 
 ---
@@ -694,85 +636,83 @@ class MyTransform(StatelessTransform):
 ### Stateful Transformation Template
 
 ```python
-from cod3s_data import StatefulTransform, Message
-from typing import List
+from cod3s_data.transformations.base import StatefulTransform
+from cod3s_data.broker.base import Broker
+from cod3s_data.core.message import Message
+from typing import Any
 
 class MyStatefulTransform(StatefulTransform):
-    """Custom stateful transformation"""
+    """Custom stateful transformation.
 
-    # Declare input channels
-    input_channels = [
-        "sensors.temp",
-        "sensors.pressure"
-    ]
+    Uses self.state (dict) for persistent state across messages.
+    Access is serialized via asyncio.Lock.
+    """
 
-    # Optional: declare output channel
-    output_channel = "indicators.result"
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        threshold: float = 100.0,
+    ) -> None:
+        super().__init__(broker, input_channels, output_channel)
+        self.threshold = threshold
 
-    def __init__(self, config):
-        super().__init__()
-        self.threshold = config.get("threshold", 100)
-
-    def transform(self, message: Message) -> List[Message]:
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
         """
-        Process message with access to state
+        Process message with access to mutable state dict.
 
-        Framework provides:
-        - self.latest: Dict[channel, Message] - latest message per channel
+        Args:
+            message: Incoming message
+            state: Persistent dict (self.state), modify in place
         """
+        # Track latest values by key
+        state[message.key] = message.value
 
         # Wait for all inputs
-        if len(self.latest) < len(self.input_channels):
-            return []
-
-        # Extract latest values
-        temp = self.latest["sensors.temp"].value
-        pressure = self.latest["sensors.pressure"].value
+        if "temperature" not in state or "pressure" not in state:
+            return None
 
         # Compute result
-        result = self.compute(temp, pressure)
+        result = state["temperature"] * state["pressure"] / self.threshold
 
-        # Return message
-        return [Message(
+        return Message(
             key="result",
             timestamp=message.timestamp,
             value=result,
-            tags=message.tags
-        )]
-
-    def compute(self, temp, pressure):
-        # Your business logic
-        return temp * pressure / self.threshold
+            tags=message.tags,
+        )
 ```
 
 ---
 
-### Registration and Usage
+### Registration via Plugin
+
+Register custom transformations using the plugin system with `ComponentFactory`:
 
 ```python
-# Register custom transformation
-from cod3s_data import TransformRegistry
+# my_plugin.py
+from cod3s_data.config.factory import ComponentFactory
 
-TransformRegistry.register("my_transform", MyTransform)
+def register(factory: ComponentFactory) -> None:
+    factory.register_transformation("my_transform", MyTransformClass)
+```
 
-# Use in YAML configuration
+Then use in YAML configuration:
+
+```yaml
+plugins:
+  - my_plugin
+
 transformations:
   - type: my_transform
-    input: "sensors.temp"
-    output: "sensors.temp.processed"
-    param1: 100
-    param2: 2.5
-
-# Or use programmatically
-from cod3s_data import Framework
-
-framework = Framework()
-transform = MyTransform(param1=100, param2=2.5)
-framework.add_transformation(
-    transform,
-    input_channel="sensors.temp",
-    output_channel="sensors.temp.processed"
-)
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.processed"
+    params:
+      param1: 100
+      param2: 2.5
 ```
 
 ---
@@ -783,21 +723,28 @@ framework.add_transformation(
 
 ```yaml
 transformations:
-  # Stateless (single input → single output)
+  # Stateless filter
   - type: filter
-    input: "sensors.temp.raw"
-    output: "sensors.temp.clean"
-    min_value: -50
-    max_value: 150
+    input_channels: "sensors.temp.raw"
+    output_channel: "sensors.temp.clean"
+    params:
+      predicate_code: "lambda msg: -50 <= msg.value <= 150"
 
-  # Stateful (multiple inputs → single output)
-  - type: custom_python
-    class: ViscosityComputer
-    inputs:
-      - "sensors.temp"
-      - "sensors.speed"
-      - "sensors.force"
-    output: "indicators.viscosity"
+  # Stateless map
+  - type: map
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.doubled"
+    params:
+      map_fn_code: "lambda x: x * 2"
+
+  # Stateful aggregate
+  - type: aggregate
+    input_channels: "sensors.temp"
+    output_channel: "sensors.temp.avg"
+    params:
+      window_type: count
+      window_size: 10
+      aggregation_fn_code: "lambda msgs: sum(m.value for m in msgs) / len(msgs)"
 ```
 
 ---
@@ -806,52 +753,33 @@ transformations:
 
 ```yaml
 transformations:
-  # Step 1: Deduplication
-  - type: deduplication
-    input: "sensors.temp.raw"
-    output: "sensors.temp.deduped"
-    window: 60
+  # Step 1: Filter out invalid values
+  - type: filter
+    input_channels: "sensors.temp.raw"
+    output_channel: "sensors.temp.clean"
+    params:
+      predicate_code: "lambda msg: -50 <= msg.value <= 150"
 
-  # Step 2: Unit conversion
-  - type: unit_conversion
-    input: "sensors.temp.deduped"
-    output: "sensors.temp.celsius"
-    from_unit: "fahrenheit"
-    to_unit: "celsius"
+  # Step 2: Compute moving average
+  - type: aggregate
+    input_channels: "sensors.temp.clean"
+    output_channel: "sensors.temp.smooth"
+    params:
+      window_type: count
+      window_size: 10
+      aggregation_fn_code: "lambda msgs: sum(m.value for m in msgs) / len(msgs)"
 
-  # Step 3: Smoothing
-  - type: moving_average
-    input: "sensors.temp.celsius"
-    output: "sensors.temp.smooth"
-    window_size: 10
-
-  # Step 4: Alert
-  - type: threshold_alert
-    input: "sensors.temp.smooth"
-    output: "sensors.temp.smooth"  # Pass-through
-    alert_output: "alerts.critical"
-    threshold: 100
+  # Step 3: Filter alerts
+  - type: filter
+    input_channels: "sensors.temp.smooth"
+    output_channel: "alerts.temp.high"
+    params:
+      predicate_code: "lambda msg: msg.value > 100"
 ```
 
 **Flow:**
 ```
-Raw → Dedup → Convert → Smooth → Alert → Destinations
-```
-
----
-
-### Multi-Output Transformations
-
-```yaml
-transformations:
-  - type: threshold_classifier
-    input: "sensors.temp"
-    outputs:
-      low: "sensors.temp.low"      # value < 20
-      normal: "sensors.temp.normal"  # 20 <= value <= 100
-      high: "sensors.temp.high"    # value > 100
-    low_threshold: 20
-    high_threshold: 100
+Raw → Filter → Aggregate → Alert → Destinations
 ```
 
 ---
@@ -944,25 +872,25 @@ def test_threshold_alert():
 **COD3S Data Transformations** process messages:
 
 1. **Stateless Transformations:**
-   - 1:N processing (one message in, 0-N out)
-   - No state, simple, fast
-   - Patterns: filtering, mapping, splitting
+   - `StatelessTransform` wraps a callable for simple 1:N processing
+   - Subclass `Transformation` directly for custom logic
+   - V1.0 built-ins: `FilterTransform`, `MapTransform`
 
 2. **Stateful Transformations:**
-   - N:M processing (multi-channel coordination)
-   - Framework-managed state helpers
-   - Patterns: aggregation, deduplication, multi-sensor computation
+   - `StatefulTransform` with `self.state` dict + `transform_with_state()`
+   - Access serialized via `asyncio.Lock`
+   - V1.0 built-in: `AggregateTransform`
 
-3. **Framework Helpers:**
-   - `self.latest` - Latest message per channel
-   - `TimeWindow` - Time-based aggregation
-   - `CountWindow` - Count-based aggregation
-   - `Cache` - Deduplication and caching
+3. **Buffer Helpers** (`cod3s_data.core.buffers`):
+   - `Latest` - Latest message per channel
+   - `TimeWindow` - Time-based sliding window
+   - `CountWindow` - Count-based sliding window
+   - `Cache` - Key-value cache with optional TTL
 
 4. **Extensibility:**
-   - Implement Transform interface
-   - Register custom transformations
-   - Use in YAML or programmatically
+   - Subclass `Transformation` or `StatefulTransform`
+   - Register via plugin with `factory.register_transformation()`
+   - Use in YAML with `input_channels`, `output_channel`, `params`
 
 **Next:** Explore [Destinations](06-DESTINATIONS.md) for data output.
 

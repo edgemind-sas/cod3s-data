@@ -9,7 +9,7 @@
 ## Navigation
 | Previous | Up | Next |
 |----------|-----|------|
-| [← TECH-06](TECH-06-DESTINATIONS-API.md) | [TECH-00-OVERVIEW](TECH-00-OVERVIEW.md) | [TECH-08 →](TECH-08-OBSERVABILITY-API.md) |
+| [<- TECH-06](TECH-06-DESTINATIONS-API.md) | [TECH-00-OVERVIEW](TECH-00-OVERVIEW.md) | [TECH-08 ->](TECH-08-OBSERVABILITY-API.md) |
 
 ---
 
@@ -28,8 +28,8 @@
 COD3S Data supports three configuration approaches:
 
 1. **YAML Declarative**: Configuration files (production)
-2. **Python Programmatic**: Direct API calls (embedded, testing)
-3. **Environment Variables**: Runtime overrides (containers, CI/CD)
+2. **Python Programmatic**: Building a `PipelineConfig` in code (embedded, testing)
+3. **Environment Variables**: Runtime overrides via `COD3S_*` env vars (containers, CI/CD)
 
 ---
 
@@ -38,70 +38,39 @@ COD3S Data supports three configuration approaches:
 ### Base Configuration Classes
 
 ```python
-from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
-from enum import Enum
+from pydantic import BaseModel, Field
+from typing import Any
 
 class SourceConfig(BaseModel):
-    """Source configuration (validated by Pydantic)"""
-    type: str = Field(..., description="Source type (csv, random, sequence, file)")
-    channel: str = Field(..., description="Target channel")
-    batch_mode: str = Field(default="batch", description="Batch mode (batch, realtime, transpose)")
+    """Configuration for a source component."""
+    type: str = Field(..., description="Source type (e.g., 'random', 'sequence', 'csv')")
+    label: str | None = Field(default=None, description="Human-readable label for display")
+    channel: str = Field(..., description="Channel to publish to")
+    params: dict[str, Any] = Field(default_factory=dict, description="Source-specific parameters")
 
-    # Type-specific fields (optional)
-    file_path: str | None = None
-    rate: float | None = None
-    start: int | None = None
-    end: int | None = None
-
-    @field_validator('type')
-    @classmethod
-    def validate_source_type(cls, v: str) -> str:
-        allowed = ['csv', 'random', 'sequence', 'file']
-        if v not in allowed:
-            raise ValueError(f"Source type must be one of {allowed}, got '{v}'")
-        return v
-
-    @field_validator('batch_mode')
-    @classmethod
-    def validate_batch_mode(cls, v: str) -> str:
-        allowed = ['batch', 'realtime', 'transpose']
-        if v not in allowed:
-            raise ValueError(f"Batch mode must be one of {allowed}, got '{v}'")
-        return v
-
-class TransformationConfig(BaseModel):
-    """Transformation configuration"""
-    type: str
-    input_channel: str | list[str]
-    output_channel: str
-
-    # Type-specific fields
-    threshold: float | None = None
-    predicate: str | None = None
-    window_duration: str | None = None  # e.g., "5m", "1h"
+class TransformConfig(BaseModel):
+    """Configuration for a transformation component."""
+    type: str = Field(..., description="Transform type (e.g., 'filter', 'map', 'aggregate')")
+    label: str | None = Field(default=None, description="Human-readable label for display")
+    input_channels: str | list[str] = Field(..., description="Input channel(s)")
+    output_channel: str = Field(..., description="Output channel")
+    params: dict[str, Any] = Field(default_factory=dict, description="Transform-specific parameters")
 
 class DestinationConfig(BaseModel):
-    """Destination configuration"""
-    type: str
-    channel_pattern: str
-
-    # Optional fields
-    file_path: str | None = None
-    buffer_size: int = 1000
-    overflow_strategy: str = "drop_oldest"
-    retry_attempts: int = 3
-    dlq_channel: str | None = None
+    """Configuration for a destination component."""
+    type: str = Field(..., description="Destination type (e.g., 'console', 'file', 'inmemory')")
+    label: str | None = Field(default=None, description="Human-readable label for display")
+    channel_pattern: str = Field(..., description="Channel pattern to subscribe to")
+    params: dict[str, Any] = Field(default_factory=dict, description="Destination-specific parameters")
 
 class BrokerConfig(BaseModel):
-    """Broker configuration"""
-    type: str = "in_memory"
-    default_history_size: int = 100
-    enable_metrics: bool = True
+    """Configuration for the broker."""
+    enable_metrics: bool = Field(default=True, description="Enable metrics emission")
+    history_size: int = Field(default=100, description="Default history size per channel")
 
 class PipelineConfig(BaseModel):
     """
-    Complete pipeline configuration.
+    Top-level pipeline configuration.
 
     This is the root configuration model.
     """
@@ -110,23 +79,25 @@ class PipelineConfig(BaseModel):
         default_factory=list,
         description="Plugin module paths to load before creating components"
     )
-    sources: list[SourceConfig] = Field(default_factory=list)
-    transformations: list[TransformationConfig] = Field(default_factory=list)
-    destinations: list[DestinationConfig] = Field(default_factory=list)
-    broker: BrokerConfig = Field(default_factory=BrokerConfig)
-
-    model_config = {
-        "validate_assignment": True,
-        "extra": "forbid",  # Reject unknown fields (catch typos)
-    }
-
-    @field_validator('sources')
-    @classmethod
-    def validate_sources_not_empty(cls, v):
-        if len(v) == 0:
-            raise ValueError("At least one source is required")
-        return v
+    broker: BrokerConfig = Field(default_factory=BrokerConfig, description="Broker configuration")
+    sources: list[SourceConfig] = Field(default_factory=list, description="Source components")
+    transformations: list[TransformConfig] = Field(
+        default_factory=list, description="Transformation components"
+    )
+    destinations: list[DestinationConfig] = Field(
+        default_factory=list, description="Destination components"
+    )
+    observatory: dict[str, Any] | None = Field(
+        default=None, description="Observatory configuration (optional)"
+    )
 ```
+
+Key design decisions:
+
+- **No type validation on config models.** Source/transform/destination `type` values are validated at component creation time by `ComponentFactory`, not by the config models. This allows plugins to register new types without modifying the config schema.
+- **`params` dict pattern.** Type-specific parameters live in `params` rather than as flat fields on the config model. This keeps the models generic and extensible.
+- **Sources can be empty.** There is no validator requiring at least one source -- an empty pipeline is valid.
+- **No `extra: "forbid"`.** Extra fields are silently ignored rather than rejected, for forward compatibility.
 
 ---
 
@@ -136,153 +107,94 @@ class PipelineConfig(BaseModel):
 
 ```yaml
 # pipeline.yaml
+name: my_pipeline
 
 # Plugins: custom component modules loaded before creating components
 plugins:
   - my_package.custom_transforms
 
 broker:
-  type: in_memory
-  default_history_size: 100
+  history_size: 100
   enable_metrics: true
 
 sources:
   - type: csv
-    file_path: data/sensors.csv
+    label: Sensor data
     channel: sensors.raw
-    batch_mode: batch
+    params:
+      file_path: data/sensors.csv
+      batch_mode: batch
 
   - type: random
+    label: Simulated sensors
     channel: sensors.simulated
-    rate: 1.0  # 1 msg/sec
-    min_value: 0.0
-    max_value: 100.0
-    batch_mode: realtime
+    params:
+      rate: 1.0
+      min_value: 0.0
+      max_value: 100.0
 
 transformations:
   - type: threshold_alert
-    input_channel: sensors.raw
+    label: Critical alert
+    input_channels: sensors.raw
     output_channel: alerts.critical
-    threshold: 50.0
+    params:
+      threshold: 50.0
 
   - type: filter
-    input_channel: sensors.raw
+    input_channels: sensors.raw
     output_channel: sensors.filtered
-    predicate: "value > 10"
+    params:
+      predicate: "value > 10"
 
 destinations:
   - type: console
     channel_pattern: alerts.**
 
   - type: file
+    label: Filtered output
     channel_pattern: sensors.filtered
-    file_path: output/filtered.jsonl
-    buffer_size: 1000
-    overflow_strategy: drop_oldest
-    retry_attempts: 3
-    dlq_channel: _dlq.file_failures
+    params:
+      file_path: output/filtered.jsonl
+
+# Optional Observatory configuration
+observatory:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8765
 ```
 
 ### Loading YAML Configuration
 
 ```python
-import yaml
-from pydantic import ValidationError
+from cod3s_data.config.loaders import load_yaml, load_dict
+from cod3s_data.framework import Framework
 
-class Framework:
-    @classmethod
-    def from_yaml(cls, file_path: str) -> "Framework":
-        """
-        Load framework from YAML file.
+# --- Load from YAML file ---
+config = load_yaml("pipeline.yaml")
 
-        Args:
-            file_path: Path to YAML configuration file
+# --- Or load from a Python dict ---
+config = load_dict({
+    "name": "my_pipeline",
+    "sources": [
+        {"type": "random", "channel": "test", "params": {"rate": 10.0}}
+    ],
+    "destinations": [
+        {"type": "console", "channel_pattern": "test"}
+    ],
+})
 
-        Returns:
-            Configured Framework instance
-
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            ValidationError: If configuration is invalid
-            yaml.YAMLError: If YAML is malformed
-        """
-        # Load YAML
-        with open(file_path, 'r') as f:
-            config_dict = yaml.safe_load(f)
-
-        # Validate with Pydantic
-        try:
-            config = PipelineConfig(**config_dict)
-        except ValidationError as e:
-            # Pydantic provides clear error messages
-            print("Configuration validation failed:")
-            print(e)
-            raise
-
-        # Build framework from validated config
-        return cls._build_from_config(config)
-
-    @classmethod
-    def _build_from_config(cls, config: PipelineConfig) -> "Framework":
-        """
-        Build framework from validated config.
-
-        Internal method to construct components.
-        """
-        framework = cls()
-
-        # Create broker
-        if config.broker.type == "in_memory":
-            framework.broker = InMemoryBroker(
-                default_history_size=config.broker.default_history_size,
-                enable_metrics=config.broker.enable_metrics
-            )
-
-        # Create sources
-        for src_cfg in config.sources:
-            source = cls._create_source(framework.broker, src_cfg)
-            framework.add_source(source)
-
-        # Create transformations
-        for tf_cfg in config.transformations:
-            transform = cls._create_transformation(framework.broker, tf_cfg)
-            framework.add_transformation(transform)
-
-        # Create destinations
-        for dest_cfg in config.destinations:
-            destination = cls._create_destination(framework.broker, dest_cfg)
-            framework.add_destination(destination)
-
-        return framework
-
-    @staticmethod
-    def _create_source(broker: Broker, config: SourceConfig) -> Source:
-        """Factory method for sources"""
-        if config.type == "csv":
-            return CSVSource(
-                broker=broker,
-                channel=config.channel,
-                file_path=config.file_path,
-                batch_mode=BatchMode(config.batch_mode)
-            )
-        elif config.type == "random":
-            return RandomSource(
-                broker=broker,
-                channel=config.channel,
-                rate=config.rate or 1.0
-            )
-        elif config.type == "sequence":
-            return SequenceSource(
-                broker=broker,
-                channel=config.channel,
-                start=config.start or 0,
-                end=config.end or 100
-            )
-        else:
-            raise ValueError(f"Unknown source type: {config.type}")
-
-    # Similar factory methods for transformations and destinations
+# --- Run the pipeline ---
+async with Framework(config) as framework:
+    await framework.run()
 ```
+
+The `load_yaml()` function:
+
+1. Reads and parses the YAML file.
+2. Applies environment variable overrides (`COD3S_*`).
+3. Validates the result with `PipelineConfig.model_validate()`.
+4. Returns a `PipelineConfig` instance.
 
 ### Configuration Validation Errors
 
@@ -290,155 +202,165 @@ Pydantic provides clear, actionable error messages:
 
 ```python
 # Missing required field
->>> config = PipelineConfig(sources=[{"type": "csv"}])
+>>> load_dict({"sources": [{"type": "csv"}]})
 ValidationError: 1 validation error for PipelineConfig
 sources.0.channel
-  field required (type=value_error.missing)
+  Field required [type=missing ...]
 
-# Invalid type
->>> config = PipelineConfig(sources=[{
-...     "type": "unknown",
-...     "channel": "test"
-... }])
-ValidationError: 1 validation error for SourceConfig
-type
-  Source type must be one of ['csv', 'random', 'sequence', 'file'], got 'unknown'
-
-# Extra field (typo detection)
->>> config = PipelineConfig(sources=[{
-...     "type": "csv",
-...     "channel": "test",
-...     "file_pth": "data.csv"  # Typo
-... }])
+# Invalid field type
+>>> load_dict({"broker": {"history_size": "not_a_number"}})
 ValidationError: 1 validation error for PipelineConfig
-sources.0
-  Extra inputs are not permitted [type=extra_forbidden, input_value={'type': 'csv', 'channel': 'test', 'file_pth': 'data.csv'}, input_type=dict]
+broker.history_size
+  Input should be a valid integer [type=int_parsing ...]
 ```
 
 ---
 
 ## Python Programmatic API
 
-### Direct Component Creation
+### Building Configuration in Code
+
+The programmatic approach constructs a `PipelineConfig` directly and passes it to `Framework`:
 
 ```python
-from cod3s_data import Framework
-from cod3s_data.sources import CSVSource, RandomSource
-from cod3s_data.transformations import ThresholdAlert
-from cod3s_data.destinations import ConsoleDestination, FileDestination
+from cod3s_data.config.models import (
+    PipelineConfig,
+    SourceConfig,
+    TransformConfig,
+    DestinationConfig,
+    BrokerConfig,
+)
+from cod3s_data.framework import Framework
 
-# Create framework
-framework = Framework()
-
-# Add components programmatically
-framework.add_source(CSVSource(
-    broker=framework.broker,
-    channel="sensors.raw",
-    file_path="data/sensors.csv",
-    batch_mode=BatchMode.BATCH
-))
-
-framework.add_source(RandomSource(
-    broker=framework.broker,
-    channel="sensors.simulated",
-    rate=1.0,
-    min_value=0.0,
-    max_value=100.0
-))
-
-framework.add_transformation(ThresholdAlert(
-    broker=framework.broker,
-    input_channel="sensors.raw",
-    output_channel="alerts.critical",
-    threshold=50.0
-))
-
-framework.add_destination(ConsoleDestination(
-    broker=framework.broker,
-    channel_pattern="alerts.**"
-))
-
-framework.add_destination(FileDestination(
-    broker=framework.broker,
-    channel_pattern="sensors.raw",
-    file_path="output/raw.jsonl"
-))
-
-# Run
-await framework.run()
-```
-
-### Fluent API (Optional)
-
-```python
-framework = (
-    Framework()
-    .with_source(CSVSource(...))
-    .with_transformation(ThresholdAlert(...))
-    .with_destination(ConsoleDestination(...))
+# Build configuration
+config = PipelineConfig(
+    name="sensor_monitoring",
+    broker=BrokerConfig(history_size=200, enable_metrics=True),
+    sources=[
+        SourceConfig(
+            type="csv",
+            label="Sensor data",
+            channel="sensors.raw",
+            params={"file_path": "data/sensors.csv", "batch_mode": "batch"},
+        ),
+        SourceConfig(
+            type="random",
+            label="Simulated sensors",
+            channel="sensors.simulated",
+            params={"rate": 1.0, "min_value": 0.0, "max_value": 100.0},
+        ),
+    ],
+    transformations=[
+        TransformConfig(
+            type="threshold_alert",
+            input_channels="sensors.raw",
+            output_channel="alerts.critical",
+            params={"threshold": 50.0},
+        ),
+    ],
+    destinations=[
+        DestinationConfig(
+            type="console",
+            channel_pattern="alerts.**",
+        ),
+        DestinationConfig(
+            type="file",
+            channel_pattern="sensors.raw",
+            params={"file_path": "output/raw.jsonl"},
+        ),
+    ],
 )
 
-await framework.run()
+# Run the pipeline
+async with Framework(config) as framework:
+    await framework.run()
 ```
+
+### Framework Constructor
+
+```python
+class Framework:
+    def __init__(
+        self,
+        config: PipelineConfig,
+        plugins: list[str] | None = None,
+        observatory: bool | Any = False,
+    ) -> None:
+        """
+        Args:
+            config: Pipeline configuration
+            plugins: Extra plugin module paths (merged with config.plugins)
+            observatory: Enable Observatory. Pass True for defaults,
+                or an ObservatoryConfig instance for custom settings.
+                Pass False (default) to disable.
+        """
+```
+
+The `Framework` is used as an async context manager:
+
+```python
+async with Framework(config) as framework:
+    await framework.run()
+```
+
+On enter (`__aenter__`), the framework calls `start()` which:
+1. Starts the Observatory server (if enabled).
+2. Loads plugins (config.plugins + extra plugins, deduplicated).
+3. Creates components from configuration via `ComponentFactory`.
+4. Starts the pipeline (broker, destinations, transformations, sources).
+
+On exit (`__aexit__`), the framework calls `stop()` for graceful shutdown.
 
 ---
 
 ## Environment Variables
 
-### Pydantic Settings Integration
+### Environment Override Pattern
+
+Environment variables are applied as overrides by the `_apply_env_overrides()` function
+inside `load_yaml()` and `load_dict()`. They follow the naming convention `COD3S_<SECTION>_<KEY>`.
 
 ```python
-from pydantic_settings import BaseSettings
+# cod3s_data/config/loaders.py
 
-class FrameworkSettings(BaseSettings):
+def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     """
-    Framework settings from environment variables.
+    Apply COD3S_* environment variable overrides to config dict.
 
-    Prefix: COD3S_
-    Example: COD3S_BROKER_HISTORY_SIZE=200
+    Supported variables:
+      COD3S_PIPELINE_NAME          - Override pipeline name
+      COD3S_BROKER_ENABLE_METRICS  - Override broker.enable_metrics (bool)
+      COD3S_BROKER_HISTORY_SIZE    - Override broker.history_size (int)
+      COD3S_OBSERVATORY_ENABLED    - Enable/disable Observatory (bool)
+      COD3S_OBSERVATORY_HOST       - Observatory host (str)
+      COD3S_OBSERVATORY_PORT       - Observatory port (int)
+      COD3S_OBSERVATORY_BUFFER_SIZE        - Observatory buffer size (int)
+      COD3S_OBSERVATORY_MEMORY_LIMIT_MB    - Observatory memory limit (int)
+      COD3S_OBSERVATORY_DEBUG              - Enable debug mode (bool)
+      COD3S_OBSERVATORY_DEBUG_GRANULARITY  - Debug granularity (str)
+      COD3S_OBSERVATORY_DEBUG_AUTO_PAUSE   - Auto-pause in debug (bool)
+      COD3S_OBSERVATORY_SAMPLING_STRATEGY  - Sampling strategy (str)
+      COD3S_OBSERVATORY_SAMPLING_RATE      - Sampling rate (float)
+      COD3S_OBSERVATORY_SAMPLING_INTERVAL_MS - Sampling interval (int)
     """
-
-    # Broker settings
-    broker_history_size: int = Field(default=100, alias="BROKER_HISTORY_SIZE")
-    broker_metrics_enabled: bool = Field(default=True, alias="BROKER_METRICS_ENABLED")
-
-    # Source settings
-    csv_file_path: str | None = Field(default=None, alias="CSV_FILE_PATH")
-    random_rate: float = Field(default=1.0, alias="RANDOM_RATE")
-
-    # Destination settings
-    output_dir: str = Field(default="output", alias="OUTPUT_DIR")
-
-    model_config = {
-        "env_prefix": "COD3S_",
-        "case_sensitive": False,
-    }
-
-# Usage
-settings = FrameworkSettings()
-
-# Override from environment
-# export COD3S_BROKER_HISTORY_SIZE=200
-# export COD3S_CSV_FILE_PATH=/data/sensors.csv
-
-broker = InMemoryBroker(default_history_size=settings.broker_history_size)
+    ...
 ```
 
-### Environment Variable Precedence
+Environment variables are applied **after** YAML parsing and **before** Pydantic validation, so they override file-based values.
 
-```python
-# Load configuration with env var overrides
-config = PipelineConfig.from_yaml("pipeline.yaml")
+### Usage Examples
 
-# Override with environment variables
-settings = FrameworkSettings()
+```bash
+# Override pipeline name
+export COD3S_PIPELINE_NAME=production_pipeline
 
-# Apply overrides
-if settings.csv_file_path:
-    config.sources[0].file_path = settings.csv_file_path
+# Override broker settings
+export COD3S_BROKER_HISTORY_SIZE=200
+export COD3S_BROKER_ENABLE_METRICS=false
 
-# Build framework
-framework = Framework._build_from_config(config)
+# Enable and configure Observatory
+export COD3S_OBSERVATORY_ENABLED=true
+export COD3S_OBSERVATORY_PORT=9000
 ```
 
 ### Docker Compose Example
@@ -451,13 +373,15 @@ services:
   cod3s-data:
     image: cod3s-data:latest
     environment:
+      - COD3S_PIPELINE_NAME=production
       - COD3S_BROKER_HISTORY_SIZE=200
-      - COD3S_CSV_FILE_PATH=/data/sensors.csv
-      - COD3S_OUTPUT_DIR=/output
+      - COD3S_BROKER_ENABLE_METRICS=true
+      - COD3S_OBSERVATORY_ENABLED=true
+      - COD3S_OBSERVATORY_PORT=8765
     volumes:
       - ./data:/data
       - ./output:/output
-    command: cod3s run /config/pipeline.yaml
+    command: cod3s-data run /config/pipeline.yaml
 ```
 
 ---
@@ -516,8 +440,8 @@ class Framework:
 
     async def start(self):
         self._load_plugins()  # Before component creation
-        await self.broker.start()
-        # Create components from config...
+        self._create_components()  # Uses ComponentFactory
+        await self._start_pipeline()
 ```
 
 ### CLI Integration
@@ -547,4 +471,4 @@ The `validate` command loads plugins and verifies that all referenced component 
 ## Navigation
 | Previous | Up | Next |
 |----------|-----|------|
-| [← TECH-06](TECH-06-DESTINATIONS-API.md) | [TECH-00-OVERVIEW](TECH-00-OVERVIEW.md) | [TECH-08 →](TECH-08-OBSERVABILITY-API.md) |
+| [<- TECH-06](TECH-06-DESTINATIONS-API.md) | [TECH-00-OVERVIEW](TECH-00-OVERVIEW.md) | [TECH-08 ->](TECH-08-OBSERVABILITY-API.md) |

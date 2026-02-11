@@ -58,7 +58,7 @@ This directory contains the **complete functional specification** for the COD3S 
 - **[03-MESSAGES.md](FUNCTIONAL_SPECIFICATION/03-MESSAGES.md)** - Message structure, delivery guarantees, ordering, retry strategies
 
 #### Components
-- **[04-SOURCES.md](FUNCTIONAL_SPECIFICATION/04-SOURCES.md)** - Data ingestion, batch modes (BATCH/REALTIME/TRANSPOSE), V1.0 catalog
+- **[04-SOURCES.md](FUNCTIONAL_SPECIFICATION/04-SOURCES.md)** - Data ingestion, batch modes (BATCH/REALTIME; TRANSPOSE planned V1.x), V1.0 catalog
 - **[05-TRANSFORMATIONS.md](FUNCTIONAL_SPECIFICATION/05-TRANSFORMATIONS.md)** - Stateless/stateful processing, framework helpers, patterns
 - **[06-DESTINATIONS.md](FUNCTIONAL_SPECIFICATION/06-DESTINATIONS.md)** - Data output, buffering, backpressure, retry logic
 - **[07-CHANNELS-ROUTING.md](FUNCTIONAL_SPECIFICATION/07-CHANNELS-ROUTING.md)** - Channel naming, wildcards, metadata filtering
@@ -100,15 +100,14 @@ This directory contains the **complete functional specification** for the COD3S 
 - Dynamic channel creation (no pre-declaration)
 
 ✅ **Reliability**
-- Configurable delivery guarantees (at-most-once, at-least-once)
-- Retry logic with exponential/fixed backoff
-- Dead Letter Queue for failed messages
+- Advisory delivery guarantees
 - Backpressure handling with bounded buffers
+- Retry logic and Dead Letter Queue — **Planned (V1.x)**
 
 ✅ **Components**
 - Sources: Random, Sequence, File, CSV (V1.0) | MQTT, HTTP, Database (V2.0+)
-- Transformations: Stateless (1:N), Stateful (N:M multi-channel), Custom Python
-- Destinations: Console, File, InMemory (V1.0) | Database, MQTT, HTTP (V2.0+)
+- Transformations: Filter, Map, Aggregate (V1.0) | Custom via plugins
+- Destinations: Console, File, Collect (V1.0) | Database, MQTT, HTTP (V2.0+)
 
 ✅ **Configuration**
 - Triple approach: YAML (declarative) + Python (programmatic) + Environment variables (deployment)
@@ -116,8 +115,8 @@ This directory contains the **complete functional specification** for the COD3S 
 
 ✅ **Observability**
 - Metrics as messages on `_metrics.*` channels
-- Structured logging with trace IDs
-- Debug mode for detailed inspection
+- Structured logging with structlog
+- Observatory web UI for real-time debugging
 
 ✅ **Deployment**
 - Embedded library (integrate into applications)
@@ -126,8 +125,8 @@ This directory contains the **complete functional specification** for the COD3S 
 
 ✅ **Testing**
 - Test sources (Random, Sequence)
-- Record/replay (TRANSPOSE mode)
 - CollectDestination for assertions
+- Record/replay (TRANSPOSE mode — planned V1.x)
 
 ---
 
@@ -178,10 +177,11 @@ Each document includes:
 
 **Scope:**
 - In-memory broker
-- Test/file sources, custom transformations
-- Console/file/memory destinations
-- YAML + Python configuration
-- Metrics as messages, structured logging
+- Test/file sources, Filter/Map/Aggregate transforms, custom via plugins
+- Console/file/collect destinations
+- YAML + Python configuration + CLI
+- Metrics as messages, structured logging, Observatory web UI
+- Plugin system for custom components
 - Embedded and standalone deployment
 
 ---
@@ -234,48 +234,51 @@ Each document includes:
 ```yaml
 # 3D Printer Monitoring Pipeline
 
+plugins:
+  - physics_transforms
+
 sources:
-  # Temperature sensors (MQTT)
-  - type: mqtt
-    channel: "printers.*.temperature.*"
+  - type: random
+    channel: "printers.temperature"
+    params:
+      rate: 10
+      min_value: 150
+      max_value: 300
 
-  # Motor speed sensors
-  - type: mqtt
-    channel: "printers.*.motor.speed.*"
-
-  # Force sensors
-  - type: mqtt
-    channel: "printers.*.force.feed"
+  - type: random
+    channel: "printers.speed"
+    params:
+      rate: 10
+      min_value: 0
+      max_value: 100
 
 transformations:
   # Alert on high temperature
-  - type: threshold_alert
-    input: "printers.*.temperature.extruder"
-    threshold: 250
-    output: "alerts.critical"
+  - type: filter
+    input_channels: "printers.temperature"
+    output_channel: "alerts.critical"
+    params:
+      condition: "value > 250"
 
-  # Compute viscosity from multiple sensors (stateful)
-  - type: custom_python
-    class: ViscosityComputer
-    inputs:
-      - "printers.{id}.temperature.extruder"
-      - "printers.{id}.motor.speed.extruder"
-      - "printers.{id}.force.feed"
-    output: "indicators.{id}.viscosity"
+  # Compute viscosity (custom plugin)
+  - type: viscosity
+    input_channels:
+      - "printers.temperature"
+      - "printers.speed"
+    output_channel: "indicators.viscosity"
+    params:
+      calibration_factor: 1.2
 
 destinations:
-  # Console for alerts
   - type: console
-    channel: "alerts.**"
+    channel_pattern: "alerts.**"
+    params:
+      format: pretty
 
-  # Database for all sensor data
-  - type: influxdb
-    channel: "sensors.**"
-    buffer_size: 10000
-
-  # Real-time dashboard (WebSocket)
-  - type: websocket
-    channel: "indicators.**"
+  - type: file
+    channel_pattern: "sensors.**"
+    params:
+      path: "/data/sensors.jsonl"
 ```
 
 **Result:** Complete monitoring solution in ~30 lines of configuration
@@ -332,7 +335,7 @@ destinations:
 
 1. **Technical Specification Phase**
    - Define implementation details (APIs, data structures, algorithms)
-   - Choose programming language and libraries (reference: Python 3.9+)
+   - Choose programming language and libraries (reference: Python 3.12+)
    - Design internal architecture (concurrency model, threading)
 
 2. **Prototype Development**

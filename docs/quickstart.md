@@ -141,6 +141,7 @@ Destinations consume messages:
 - **console**: Print to stdout
 - **file**: Write to files
 - **inmemory**: Store in memory (for testing)
+- **collect**: Collect messages with assertion helpers (for testing)
 
 ## Using Plugins
 
@@ -241,11 +242,11 @@ name: multi_sensor
 sources:
   - type: random
     channel: sensors.temperature
-    params: {rate: 10.0, value_min: 20.0, value_max: 30.0}
+    params: {rate: 10.0, min_value: 20.0, max_value: 30.0}
 
   - type: random
     channel: sensors.pressure
-    params: {rate: 10.0, value_min: 1000.0, value_max: 1030.0}
+    params: {rate: 10.0, min_value: 1000.0, max_value: 1030.0}
 
 destinations:
   - type: console
@@ -307,10 +308,13 @@ This checks:
 cod3s-data run [OPTIONS] CONFIG_FILE
 
 Options:
-  --log-level LEVEL     Logging level (DEBUG, INFO, WARNING, ERROR)
-  --json-logs           Output logs in JSON format
-  -p, --plugin MODULE   Plugin module path to load (repeatable)
-  -v, --verbose         Show stack traces on error
+  --log-level LEVEL        Logging level (DEBUG, INFO, WARNING, ERROR)
+  --json-logs              Output logs in JSON format
+  -p, --plugin MODULE      Plugin module path to load (repeatable)
+  -v, --verbose            Show stack traces on error
+  --observatory            Enable Observatory web UI for debugging and monitoring
+  --observatory-port PORT  Observatory server port (default: 8765)
+  --interactive            Start in interactive mode (pipeline waits for UI to start it; implies --observatory)
 ```
 
 ### Validate Command

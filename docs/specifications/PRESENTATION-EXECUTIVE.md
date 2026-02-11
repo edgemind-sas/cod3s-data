@@ -114,26 +114,35 @@ Fill the gap between heavy SCADA systems and complex streaming platforms with a 
 ### The COD3S Data Solution
 
 ```yaml
+plugins:
+  - physics_transforms
+
 sources:
-  - type: mqtt
-    channel: "printers.*.temperature.*"
+  - type: random
+    channel: "printers.temperature"
+    params:
+      rate: 10
+      min_value: 150
+      max_value: 300
 
 transformations:
-  - type: threshold_alert
-    input: "printers.*.temperature.extruder"
-    threshold: 250
-    output: "alerts.critical"
+  - type: filter
+    input_channels: "printers.temperature"
+    output_channel: "alerts.critical"
+    params:
+      condition: "value > 250"
 
-  - type: custom_python
-    class: ViscosityComputer
-    inputs: ["temp", "speed", "force"]
-    output: "indicators.viscosity"
+  - type: viscosity    # From plugin
+    input_channels: ["sensors.temp", "sensors.speed", "sensors.force"]
+    output_channel: "indicators.viscosity"
 
 destinations:
   - type: console
-    channel: "alerts.**"
-  - type: database
-    channel: "sensors.**"
+    channel_pattern: "alerts.**"
+  - type: file
+    channel_pattern: "sensors.**"
+    params:
+      path: "/data/sensors.jsonl"
 ```
 
 **Result**: Complete monitoring solution in <20 lines of configuration
@@ -176,9 +185,9 @@ graph TB
 ## Key Capabilities
 
 ### 1. Flexible Data Ingestion
-- Multiple source types (MQTT, files, databases, HTTP)
-- Configurable delivery guarantees (at-most-once, at-least-once)
-- Batch and streaming modes
+- Multiple source types (random, files, test generators; MQTT/HTTP in V2.0)
+- Batch modes: BATCH (finite), REALTIME (continuous), TRANSPOSE (replay, planned V1.x)
+- Backpressure-aware with bounded buffers
 
 ### 2. Real-Time Processing
 - **Stateless transformations**: Filtering, alerts, unit conversion
@@ -219,6 +228,9 @@ graph TB
 - ✅ Test/file sources, custom transformations
 - ✅ Console/file/memory destinations
 - ✅ YAML + Python configuration
+- ✅ Observatory web UI for debugging
+- ✅ CLI (`cod3s-data run`/`validate`)
+- ✅ Plugin system for custom components
 - ✅ Performance: <50ms p99, 10K msg/s, <512MB RAM
 
 ### V2.0 - Integration (6-12 months)
@@ -290,7 +302,7 @@ graph TB
    - 15 detailed documents + technical presentation
 
 2. **Prototype Development**
-   - Reference implementation in Python 3.9+
+   - Reference implementation in Python 3.12+
    - Validate performance targets
    - Develop example applications (3D printer monitoring)
 
