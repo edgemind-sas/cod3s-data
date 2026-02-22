@@ -1,9 +1,14 @@
 """Tests for Observatory Bridge."""
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
 
+from cod3s_data.core.message import Message
 from cod3s_data.observatory.bridge import ObservatoryBridge
 from cod3s_data.observatory.buffer import EventBuffer, EventType
+from cod3s_data.observatory.message_store import JourneyStore, MessageDetailStore
 from cod3s_data.observatory.sampler import MessageSampler
 from cod3s_data.observatory.websocket_manager import WebSocketManager
 
@@ -12,13 +17,29 @@ def _make_bridge(
     buffer: EventBuffer | None = None,
     sampler: MessageSampler | None = None,
     ws_manager: WebSocketManager | None = None,
+    message_store: MessageDetailStore | None = None,
+    journey_store: JourneyStore | None = None,
 ) -> ObservatoryBridge:
     """Create a bridge with default components for testing."""
     return ObservatoryBridge(
         event_buffer=buffer or EventBuffer(),
         sampler=sampler or MessageSampler(),
         websocket_manager=ws_manager or WebSocketManager(),
+        message_store=message_store,
+        journey_store=journey_store,
     )
+
+
+def _make_message(**kwargs) -> Message:
+    """Create a test Message."""
+    defaults = {
+        "key": "temperature",
+        "timestamp": datetime.now(timezone.utc),
+        "value": 42.5,
+        "tags": {"sensor": "TH001"},
+    }
+    defaults.update(kwargs)
+    return Message(**defaults)
 
 
 class TestObservatoryBridge:
@@ -234,3 +255,364 @@ class TestCreateObservatory:
         bridge = create_observatory(config=config)
         assert isinstance(bridge, ObservatoryBridge)
         assert bridge._buffer.max_size == 500
+
+    def test_create_injects_stores(self):
+        from cod3s_data.observatory import create_observatory
+
+        bridge = create_observatory()
+        assert bridge._message_store is not None
+        assert bridge._journey_store is not None
+
+
+class TestMessageInspectorHooks:
+    """Tests for the new message inspector hooks."""
+
+    @pytest.mark.asyncio
+    async def test_on_message_published_stores_detail(self):
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+        msg = _make_message()
+        await bridge.on_message_published("sensors.temp", msg, 2)
+
+        msg_id = str(msg.id)
+        detail = ms.get(msg_id)
+        assert detail is not None
+        assert detail["channel"] == "sensors.temp"
+        assert detail["subscriber_count"] == 2
+        assert detail["key"] == "temperature"
+        assert detail["trace_id"] == msg_id
+
+    @pytest.mark.asyncio
+    async def test_on_message_published_records_journey_step(self):
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+        msg = _make_message()
+        await bridge.on_message_published("sensors.temp", msg, 1)
+
+        trace_id = str(msg.id)
+        journey = js.get_journey(trace_id)
+        assert journey is not None
+        assert len(journey) == 1
+        assert journey[0]["stage"] == "PUBLISHED"
+        assert journey[0]["channel"] == "sensors.temp"
+
+    @pytest.mark.asyncio
+    async def test_on_message_published_includes_message_id(self):
+        buf = EventBuffer()
+        bridge = _make_bridge(buffer=buf)
+        msg = _make_message()
+        await bridge.on_message_published("ch", msg, 1)
+        events = buf.get_recent(1, EventType.MESSAGE)
+        assert events[0]["data"]["message_id"] == str(msg.id)
+
+    @pytest.mark.asyncio
+    async def test_on_message_received_records_received(self):
+        js = JourneyStore()
+        bridge = _make_bridge(journey_store=js)
+        msg = _make_message()
+        # Seed the trace_id
+        bridge._set_trace_id(str(msg.id), "trace-abc")
+        await bridge.on_message_received("tfm-0", "transformation", msg)
+
+        journey = js.get_journey("trace-abc")
+        assert journey is not None
+        assert len(journey) == 1
+        assert journey[0]["stage"] == "RECEIVED"
+        assert journey[0]["component_id"] == "tfm-0"
+
+    @pytest.mark.asyncio
+    async def test_on_message_received_records_delivered_for_destination(self):
+        js = JourneyStore()
+        bridge = _make_bridge(journey_store=js)
+        msg = _make_message()
+        bridge._set_trace_id(str(msg.id), "trace-xyz")
+        await bridge.on_message_received("dst-0", "destination", msg)
+
+        journey = js.get_journey("trace-xyz")
+        assert journey[0]["stage"] == "DELIVERED"
+
+    @pytest.mark.asyncio
+    async def test_on_message_received_noop_without_journey_store(self):
+        bridge = _make_bridge()  # No journey_store
+        msg = _make_message()
+        await bridge.on_message_received("tfm-0", "transformation", msg)
+        # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_on_message_processed_records_step_and_links_outputs(self):
+        js = JourneyStore()
+        bridge = _make_bridge(journey_store=js)
+        input_msg = _make_message(key="input")
+        output_msg = _make_message(key="output")
+
+        input_id = str(input_msg.id)
+        output_id = str(output_msg.id)
+        bridge._set_trace_id(input_id, "trace-main")
+
+        await bridge.on_message_processed(
+            "tfm-0", "transformation", input_msg, [output_msg], "alerts.high"
+        )
+
+        # Check journey step
+        journey = js.get_journey("trace-main")
+        assert journey is not None
+        assert len(journey) == 1
+        assert journey[0]["stage"] == "PROCESSED"
+        assert journey[0]["channel"] == "alerts.high"
+
+        # Check output message is linked to same trace
+        assert bridge._trace_ids[output_id] == "trace-main"
+
+    @pytest.mark.asyncio
+    async def test_get_message_detail_with_journey(self):
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+        msg = _make_message()
+        await bridge.on_message_published("sensors.temp", msg, 3)
+
+        detail = bridge.get_message_detail(str(msg.id))
+        assert detail is not None
+        assert detail["channel"] == "sensors.temp"
+        assert "journey" in detail
+        assert len(detail["journey"]) == 1
+        assert detail["journey"][0]["stage"] == "PUBLISHED"
+
+    def test_get_message_detail_not_found(self):
+        ms = MessageDetailStore()
+        bridge = _make_bridge(message_store=ms)
+        assert bridge.get_message_detail("nonexistent") is None
+
+    def test_get_message_detail_without_store(self):
+        bridge = _make_bridge()
+        assert bridge.get_message_detail("any-id") is None
+
+    @pytest.mark.asyncio
+    async def test_trace_id_linking_across_chain(self):
+        """Test that trace_id propagates: source -> transform -> destination."""
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+
+        # Source publishes
+        src_msg = _make_message(key="raw")
+        await bridge.on_message_published("sensors.raw", src_msg, 1)
+        trace_id = str(src_msg.id)
+
+        # Transform receives
+        await bridge.on_message_received("tfm-0", "transformation", src_msg)
+
+        # Transform produces output
+        out_msg = _make_message(key="processed")
+        await bridge.on_message_processed(
+            "tfm-0", "transformation", src_msg, [out_msg], "sensors.processed"
+        )
+
+        # Output published
+        await bridge.on_message_published("sensors.processed", out_msg, 1)
+
+        # Destination receives
+        await bridge.on_message_received("dst-0", "destination", out_msg)
+
+        # Full journey via original trace_id
+        journey = js.get_journey(trace_id)
+        assert journey is not None
+        stages = [s["stage"] for s in journey]
+        assert stages == ["PUBLISHED", "RECEIVED", "PROCESSED", "PUBLISHED", "DELIVERED"]
+
+    @pytest.mark.asyncio
+    async def test_journey_labels_with_framework(self):
+        """Journey steps should include component labels when framework is connected."""
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "sensors.raw", label="Temp Sensor")],
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "alerts.high", label="Alert Filter")],
+            destinations=[_FakeDestination("dst-0", "alerts.**", label="Alert Logger")],
+        )
+
+        msg = _make_message(key="raw")
+        await bridge.on_message_published("sensors.raw", msg, 1)
+        trace_id = str(msg.id)
+
+        await bridge.on_message_received("tfm-0", "transformation", msg)
+
+        journey = js.get_journey(trace_id)
+        assert journey is not None
+        # PUBLISHED step should resolve the source
+        assert journey[0]["component_id"] == "src-0"
+        assert journey[0]["component_type"] == "source"
+        assert journey[0]["label"] == "Temp Sensor"
+        # RECEIVED step should have the transformation label
+        assert journey[1]["component_id"] == "tfm-0"
+        assert journey[1]["label"] == "Alert Filter"
+
+    @pytest.mark.asyncio
+    async def test_journey_message_ids_linear(self):
+        """Each journey step should carry message_id and parent_message_id."""
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+
+        src_msg = _make_message(key="raw")
+        src_id = str(src_msg.id)
+        await bridge.on_message_published("ch", src_msg, 1)
+
+        journey = js.get_journey(src_id)
+        # Root message: message_id set, parent_message_id empty
+        assert journey[0]["message_id"] == src_id
+        assert journey[0]["parent_message_id"] == ""
+
+    @pytest.mark.asyncio
+    async def test_journey_fan_out_tree(self):
+        """Fan-out: one message received by two transforms, each producing output."""
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+
+        # Source publishes msg-A on sensors.raw
+        msg_a = _make_message(key="raw")
+        msg_a_id = str(msg_a.id)
+        await bridge.on_message_published("sensors.raw", msg_a, 2)
+        trace_id = msg_a_id
+
+        # Two transforms receive msg-A
+        await bridge.on_message_received("tfm-0", "transformation", msg_a)
+        await bridge.on_message_received("tfm-1", "transformation", msg_a)
+
+        # tfm-0 produces msg-B
+        msg_b = _make_message(key="alerts")
+        msg_b_id = str(msg_b.id)
+        await bridge.on_message_processed(
+            "tfm-0", "transformation", msg_a, [msg_b], "alerts.high"
+        )
+
+        # tfm-1 produces msg-C
+        msg_c = _make_message(key="logs")
+        msg_c_id = str(msg_c.id)
+        await bridge.on_message_processed(
+            "tfm-1", "transformation", msg_a, [msg_c], "logs.raw"
+        )
+
+        # msg-B and msg-C are published
+        await bridge.on_message_published("alerts.high", msg_b, 1)
+        await bridge.on_message_published("logs.raw", msg_c, 1)
+
+        # Destinations receive
+        await bridge.on_message_received("dst-0", "destination", msg_b)
+        await bridge.on_message_received("dst-1", "destination", msg_c)
+
+        # All steps are on the same trace
+        journey = js.get_journey(trace_id)
+        assert journey is not None
+
+        # Verify parent_message_id linking
+        # msg-A steps: no parent
+        a_steps = [s for s in journey if s["message_id"] == msg_a_id]
+        for step in a_steps:
+            assert step["parent_message_id"] == ""
+
+        # msg-B steps: parent is msg-A
+        b_steps = [s for s in journey if s["message_id"] == msg_b_id]
+        assert len(b_steps) >= 1
+        for step in b_steps:
+            assert step["parent_message_id"] == msg_a_id
+
+        # msg-C steps: parent is msg-A
+        c_steps = [s for s in journey if s["message_id"] == msg_c_id]
+        assert len(c_steps) >= 1
+        for step in c_steps:
+            assert step["parent_message_id"] == msg_a_id
+
+        # Verify we have the full set of stages
+        stages = [s["stage"] for s in journey]
+        assert stages.count("PUBLISHED") == 3   # msg-A, msg-B, msg-C
+        assert stages.count("RECEIVED") == 2    # tfm-0, tfm-1
+        assert stages.count("PROCESSED") == 2   # tfm-0, tfm-1
+        assert stages.count("DELIVERED") == 2   # dst-0, dst-1
+
+    @pytest.mark.asyncio
+    async def test_receive_channel_resolved_via_topology(self):
+        """RECEIVED/DELIVERED steps should carry the channel they received on,
+        resolved via the framework topology (subscription patterns).
+
+        This is the real-world case where with_value() preserves the message UUID,
+        so all steps have the same message_id. Without channel info, the frontend
+        cannot build the correct branching tree.
+        """
+        ms = MessageDetailStore()
+        js = JourneyStore()
+        bridge = _make_bridge(message_store=ms, journey_store=js)
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "sensors.temperature.room1", label="Capteur Température")],
+            transformations=[
+                _FakeTransformation("tfm-0", ["sensors.temperature.**"], "alerts.high_temp", label="Alerte haute temp"),
+                _FakeTransformation("tfm-1", ["sensors.temperature.**"], "stats.temperature.avg", label="Moyenne Température"),
+            ],
+            destinations=[
+                _FakeDestination("dst-0", "sensors.**", label="Log Capteurs"),
+                _FakeDestination("dst-1", "alerts.**", label="Log Alertes"),
+                _FakeDestination("dst-2", "stats.**", label="Log Statistiques"),
+            ],
+        )
+
+        # Source publishes a message (same UUID used throughout via with_value)
+        msg = _make_message(key="random_value")
+        msg_id = str(msg.id)
+        trace_id = msg_id
+
+        # 1. Source publishes on sensors.temperature.room1
+        await bridge.on_message_published("sensors.temperature.room1", msg, 3)
+
+        # 2. dst-0 receives (subscriber of sensors.**)
+        await bridge.on_message_received("dst-0", "destination", msg)
+        # 3. tfm-0 receives (subscriber of sensors.temperature.**)
+        await bridge.on_message_received("tfm-0", "transformation", msg)
+        # 4. tfm-0 processes and produces output (same msg id via with_value)
+        await bridge.on_message_processed("tfm-0", "transformation", msg, [msg], "alerts.high_temp")
+        # 5. tfm-0's output published on alerts.high_temp
+        await bridge.on_message_published("alerts.high_temp", msg, 1)
+        # 6. tfm-1 receives (subscriber of sensors.temperature.**)
+        await bridge.on_message_received("tfm-1", "transformation", msg)
+        # 7. dst-1 receives (subscriber of alerts.**)
+        await bridge.on_message_received("dst-1", "destination", msg)
+
+        journey = js.get_journey(trace_id)
+        assert journey is not None
+        assert len(journey) == 7
+
+        # Verify channel resolution
+        # Step 0: PUBLISHED on sensors.temperature.room1
+        assert journey[0]["stage"] == "PUBLISHED"
+        assert journey[0]["channel"] == "sensors.temperature.room1"
+
+        # Step 1: DELIVERED dst-0 should be on sensors.temperature.room1
+        assert journey[1]["stage"] == "DELIVERED"
+        assert journey[1]["component_id"] == "dst-0"
+        assert journey[1]["channel"] == "sensors.temperature.room1"
+
+        # Step 2: RECEIVED tfm-0 should be on sensors.temperature.room1
+        assert journey[2]["stage"] == "RECEIVED"
+        assert journey[2]["component_id"] == "tfm-0"
+        assert journey[2]["channel"] == "sensors.temperature.room1"
+
+        # Step 3: PROCESSED tfm-0 (output channel)
+        assert journey[3]["stage"] == "PROCESSED"
+        assert journey[3]["channel"] == "alerts.high_temp"
+
+        # Step 4: PUBLISHED on alerts.high_temp
+        assert journey[4]["stage"] == "PUBLISHED"
+        assert journey[4]["channel"] == "alerts.high_temp"
+
+        # Step 5: RECEIVED tfm-1 should be on sensors.temperature.room1
+        assert journey[5]["stage"] == "RECEIVED"
+        assert journey[5]["component_id"] == "tfm-1"
+        assert journey[5]["channel"] == "sensors.temperature.room1"
+
+        # Step 6: DELIVERED dst-1 should be on alerts.high_temp
+        assert journey[6]["stage"] == "DELIVERED"
+        assert journey[6]["component_id"] == "dst-1"
+        assert journey[6]["channel"] == "alerts.high_temp"

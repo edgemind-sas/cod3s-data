@@ -66,7 +66,13 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(msg, i) in filteredMessages" :key="i">
+              <tr
+                v-for="(msg, i) in filteredMessages"
+                :key="i"
+                :class="{ 'inspector-selected': msg.message_id === inspector.selectedMessageId }"
+                class="message-row"
+                @click="inspectMessage(msg.message_id)"
+              >
                 <td class="text-caption text-medium-emphasis" style="font-family: monospace">
                   {{ formatTime(msg.timestamp) }}
                 </td>
@@ -108,16 +114,17 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
 import { useMessagesStore } from '@/stores/messages'
-
-const PALETTE = ['#42A5F5', '#66BB6A', '#FFA726', '#EF5350', '#AB47BC', '#26C6DA', '#EC407A', '#8D6E63']
-
-function channelColor(channel: string): string {
-  let hash = 0
-  for (let i = 0; i < channel.length; i++) hash = (hash * 31 + channel.charCodeAt(i)) | 0
-  return PALETTE[Math.abs(hash) % PALETTE.length]
-}
+import { useInspector } from '@/composables/useInspector'
+import { channelColor } from '@/utils/channelColors'
 
 const messagesStore = useMessagesStore()
+const inspector = useInspector()
+
+function inspectMessage(messageId: string) {
+  if (messageId) {
+    inspector.inspect(messageId)
+  }
+}
 
 const selectedChannel = ref<string | null>(null)
 const keyFilter = ref('')
@@ -171,5 +178,11 @@ watch(
 .messages-table-wrap {
   max-height: 70vh;
   overflow-y: auto;
+}
+.message-row {
+  cursor: pointer;
+}
+.inspector-selected {
+  background: rgba(var(--v-theme-primary), 0.08) !important;
 }
 </style>

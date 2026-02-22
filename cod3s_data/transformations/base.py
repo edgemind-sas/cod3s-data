@@ -53,7 +53,28 @@ class Transformation(ABC):
     async def _process_message(self, message: Message) -> None:
         """Process incoming message and publish results."""
         try:
+            # Observatory: RECEIVED
+            if self._bridge is not None:
+                try:
+                    await self._bridge.on_message_received(
+                        self._component_id, "transformation", message
+                    )
+                except Exception:
+                    pass
+
             results = await self.transform(message)
+
+            # Observatory: PROCESSED (link outputs to input trace)
+            if results and self._bridge is not None:
+                try:
+                    out_list = results if isinstance(results, list) else [results]
+                    await self._bridge.on_message_processed(
+                        self._component_id, "transformation",
+                        message, out_list, self.output_channel
+                    )
+                except Exception:
+                    pass
+
             if results:
                 for result in results if isinstance(results, list) else [results]:
                     await self.broker.publish(self.output_channel, result)

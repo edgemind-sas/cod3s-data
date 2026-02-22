@@ -80,3 +80,45 @@ export interface DebugInfo {
   slow_motion_delay_ms: number
   step_count: number
 }
+
+/** Message Inspector types */
+export interface JourneyStep {
+  stage: 'PUBLISHED' | 'RECEIVED' | 'PROCESSED' | 'DELIVERED'
+  component_id: string
+  component_type: string
+  channel: string
+  message_id: string
+  parent_message_id: string
+  label: string
+  timestamp: string
+}
+
+/**
+ * A node in the journey tree.
+ *
+ * Each step in the journey becomes a node. Children represent the next
+ * steps in the message flow:
+ * - PUBLISHED → children are the RECEIVED/DELIVERED receivers (one branch per receiver)
+ * - RECEIVED → child is the PROCESSED step (if transform produces output)
+ * - PROCESSED → child is the PUBLISHED step (re-publication)
+ * - DELIVERED → leaf node (end of branch)
+ */
+export interface JourneyTreeNode {
+  step: JourneyStep
+  children: JourneyTreeNode[]
+}
+
+export interface MessageDetail {
+  message_id: string
+  channel: string
+  key: string | null
+  value: unknown
+  value_type: string
+  tags: Record<string, string>
+  subscriber_count: number
+  timestamp: string
+  trace_id: string
+  journey: JourneyStep[]
+}
+
+export type InspectorTab = 'SUMMARY' | 'VALUE' | 'TAGS' | 'JOURNEY' | 'RAW'

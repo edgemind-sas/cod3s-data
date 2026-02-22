@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 export interface StoredMessage {
+  message_id: string
   channel: string
   key: string | null
   value_preview: string

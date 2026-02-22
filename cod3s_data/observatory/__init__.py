@@ -34,6 +34,7 @@ def create_observatory(
     from cod3s_data.observatory.buffer import EventBuffer
     from cod3s_data.observatory.config import ObservatoryConfig
     from cod3s_data.observatory.debug import DebugController
+    from cod3s_data.observatory.message_store import JourneyStore, MessageDetailStore
     from cod3s_data.observatory.sampler import MessageSampler
     from cod3s_data.observatory.server import EmbeddedServer
     from cod3s_data.observatory.websocket_manager import WebSocketManager
@@ -53,12 +54,16 @@ def create_observatory(
     )
     ws_manager = WebSocketManager()
     debug_controller = DebugController(enabled=config.debug.enabled)
+    message_store = MessageDetailStore(max_entries=config.message_detail_cache_size)
+    journey_store = JourneyStore(max_entries=config.message_detail_cache_size)
 
     # Create bridge
     bridge = ObservatoryBridge(
         event_buffer=event_buffer,
         sampler=sampler,
         websocket_manager=ws_manager,
+        message_store=message_store,
+        journey_store=journey_store,
     )
 
     # Create FastAPI app

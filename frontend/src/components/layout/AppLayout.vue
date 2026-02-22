@@ -48,22 +48,26 @@
       </template>
     </v-app-bar>
     <AppSidebar />
-    <v-main>
+    <v-main :style="{ paddingBottom: inspectorStore.isOpen ? inspectorStore.panelHeight + 'px' : '40px' }">
       <v-container fluid class="pa-4">
         <slot />
       </v-container>
     </v-main>
+    <MessageInspector />
   </v-layout>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import AppSidebar from './AppSidebar.vue'
+import MessageInspector from '@/components/inspector/MessageInspector.vue'
 import { usePipeline } from '@/composables/usePipeline'
 import { usePipelineStore } from '@/stores/pipeline'
+import { useInspectorStore } from '@/stores/inspector'
 
 const pipeline = usePipeline()
 const pipelineStore = usePipelineStore()
+const inspectorStore = useInspectorStore()
 
 const stateColor = computed(() => {
   switch (pipelineStore.state) {

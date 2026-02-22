@@ -169,6 +169,23 @@ async def _handle_command(
             "payload": {"message": str(e)},
         }
 
+    if cmd_type == "message.inspect":
+        message_id = payload.get("message_id", "")
+        detail = bridge.get_message_detail(message_id)
+        if detail is None:
+            return {
+                "type": "error",
+                "id": "evt-err",
+                "timestamp": now,
+                "payload": {"message": f"Message {message_id} not found"},
+            }
+        return {
+            "type": "message.detail",
+            "id": f"evt-{message_id[:8]}",
+            "timestamp": now,
+            "payload": detail,
+        }
+
     return {
         "type": "error",
         "id": "evt-err",

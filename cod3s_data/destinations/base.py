@@ -74,6 +74,13 @@ class Destination(ABC):
         await self._notify_state_change("running", "stopped")
 
     async def _enqueue_message(self, message: Message) -> None:
+        if self._bridge is not None:
+            try:
+                await self._bridge.on_message_received(
+                    self._component_id, "destination", message
+                )
+            except Exception:
+                pass
         await self.buffer.put(message)
 
     async def _writer_loop(self) -> None:

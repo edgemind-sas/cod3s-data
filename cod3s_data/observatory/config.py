@@ -33,6 +33,7 @@ class ObservatoryConfig(BaseModel):
     port: int = Field(default=8765, ge=1024, le=65535)
     debug: DebugConfig = Field(default_factory=DebugConfig)
     buffer_size: int = Field(default=1000, ge=100, le=100000)
+    message_detail_cache_size: int = Field(default=500, ge=50, le=5000)
     memory_limit_mb: int = Field(default=50, ge=10, le=500)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     interactive: bool = False

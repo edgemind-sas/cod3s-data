@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from cod3s_data.core.subscription_registry import SubscriptionRegistry
 from cod3s_data.observatory.buffer import EventBuffer, EventType, ObservatoryEvent
+from cod3s_data.observatory.message_store import JourneyStep, JourneyStore, MessageDetailStore
 from cod3s_data.observatory.sampler import MessageSampler
 from cod3s_data.observatory.websocket_manager import WebSocketManager
 
@@ -15,6 +17,8 @@ if TYPE_CHECKING:
     from cod3s_data.core.message import Message
 
 logger = structlog.get_logger()
+
+_TRACE_ID_CACHE_SIZE = 2000
 
 
 class ObservatoryBridge:
@@ -29,12 +33,20 @@ class ObservatoryBridge:
         event_buffer: EventBuffer,
         sampler: MessageSampler,
         websocket_manager: WebSocketManager,
+        message_store: MessageDetailStore | None = None,
+        journey_store: JourneyStore | None = None,
     ) -> None:
         self._buffer = event_buffer
         self._sampler = sampler
         self._ws = websocket_manager
+        self._message_store = message_store
+        self._journey_store = journey_store
         self._server: Any = None
         self._framework: Any = None
+        # Mapping message_id -> trace_id for correlating messages across transformations
+        self._trace_ids: OrderedDict[str, str] = OrderedDict()
+        # Mapping message_id -> parent_message_id for tree structure
+        self._parent_ids: OrderedDict[str, str] = OrderedDict()
 
     # --- Lifecycle ---
 
@@ -60,6 +72,100 @@ class ObservatoryBridge:
         if self._server is not None:
             await self._server.stop()
 
+    # --- Trace ID management ---
+
+    def _get_or_create_trace_id(self, message_id: str) -> str:
+        """Get an existing trace_id for a message, or use message_id as new trace."""
+        if message_id in self._trace_ids:
+            self._trace_ids.move_to_end(message_id)
+            return self._trace_ids[message_id]
+        # New message: trace_id = message_id
+        self._set_trace_id(message_id, message_id)
+        return message_id
+
+    def _set_trace_id(self, message_id: str, trace_id: str) -> None:
+        """Associate a message_id with a trace_id, with LRU eviction."""
+        if message_id in self._trace_ids:
+            self._trace_ids.move_to_end(message_id)
+        else:
+            while len(self._trace_ids) >= _TRACE_ID_CACHE_SIZE:
+                self._trace_ids.popitem(last=False)
+        self._trace_ids[message_id] = trace_id
+
+    def _set_parent_id(self, message_id: str, parent_message_id: str) -> None:
+        """Record that message_id was produced from parent_message_id."""
+        if message_id in self._parent_ids:
+            self._parent_ids.move_to_end(message_id)
+        else:
+            while len(self._parent_ids) >= _TRACE_ID_CACHE_SIZE:
+                self._parent_ids.popitem(last=False)
+        self._parent_ids[message_id] = parent_message_id
+
+    def _get_parent_id(self, message_id: str) -> str:
+        """Get the parent message_id, or empty string if root."""
+        return self._parent_ids.get(message_id, "")
+
+    # --- Component resolution ---
+
+    def _resolve_publisher(self, channel: str) -> tuple[str, str, str]:
+        """Find which component publishes to a given channel.
+
+        Returns (component_id, component_type, label).
+        """
+        if self._framework is None:
+            return ("broker", "broker", "")
+        for source in self._framework.sources:
+            if source.channel == channel:
+                return (source._component_id, "source", source._label)
+        for tfm in self._framework.transformations:
+            if tfm.output_channel == channel:
+                return (tfm._component_id, "transformation", tfm._label)
+        return ("broker", "broker", "")
+
+    def _resolve_label(self, component_id: str) -> str:
+        """Get the label for a component by its ID."""
+        if self._framework is None:
+            return ""
+        for comp in (
+            list(self._framework.sources)
+            + list(self._framework.transformations)
+            + list(self._framework.destinations)
+        ):
+            if getattr(comp, "_component_id", None) == component_id:
+                return getattr(comp, "_label", "")
+        return ""
+
+    def _get_component_sub_patterns(self, component_id: str) -> list[str]:
+        """Get subscription patterns for a component."""
+        if self._framework is None:
+            return []
+        for tfm in self._framework.transformations:
+            if tfm._component_id == component_id:
+                return list(tfm.input_channels)
+        for dest in self._framework.destinations:
+            if dest._component_id == component_id:
+                return [dest.channel_pattern]
+        return []
+
+    def _find_receive_channel(self, component_id: str, trace_id: str) -> str:
+        """Determine which published channel this component received from.
+
+        Uses topology (subscription patterns) to match against published
+        channels in this journey.
+        """
+        patterns = self._get_component_sub_patterns(component_id)
+        if not patterns or self._journey_store is None:
+            return ""
+        journey = self._journey_store.get_journey(trace_id)
+        if not journey:
+            return ""
+        published_channels = [s["channel"] for s in journey if s["stage"] == "PUBLISHED"]
+        for channel in published_channels:
+            for pattern in patterns:
+                if SubscriptionRegistry.matches(pattern, channel):
+                    return channel
+        return ""
+
     # --- Observation Hooks (Framework -> Bridge) ---
     # All hooks are error-isolated: they catch exceptions to
     # never crash the pipeline.
@@ -75,6 +181,9 @@ class ObservatoryBridge:
             if not self._sampler.should_process(channel):
                 return
 
+            msg_id = str(getattr(message, "id", ""))
+            trace_id = self._get_or_create_trace_id(msg_id)
+
             value = getattr(message, "value", None)
             value_preview = repr(value)
             if len(value_preview) > 120:
@@ -87,12 +196,100 @@ class ObservatoryBridge:
                     "value_preview": value_preview,
                     "tags": dict(getattr(message, "tags", {})),
                     "subscriber_count": subscriber_count,
+                    "message_id": msg_id,
                 },
             )
             self._buffer.push(event)
             await self._ws.broadcast_event("message.published", event.data)
+
+            # Store complete message details
+            if self._message_store is not None:
+                try:
+                    msg_dict = message.to_dict() if hasattr(message, "to_dict") else {}
+                    self._message_store.store(msg_id, channel, msg_dict, subscriber_count, trace_id)
+                except Exception:
+                    pass
+
+            # Record PUBLISHED journey step with resolved publisher
+            if self._journey_store is not None:
+                try:
+                    pub_id, pub_type, pub_label = self._resolve_publisher(channel)
+                    parent_id = self._get_parent_id(msg_id)
+                    self._journey_store.add_step(trace_id, JourneyStep(
+                        stage="PUBLISHED",
+                        component_id=pub_id,
+                        component_type=pub_type,
+                        channel=channel,
+                        message_id=msg_id,
+                        parent_message_id=parent_id,
+                        label=pub_label,
+                    ))
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.debug("Observatory hook error", hook="on_message_published", error=str(e))
+
+    async def on_message_received(
+        self,
+        component_id: str,
+        component_type: str,
+        message: Message,
+    ) -> None:
+        """Called when a transformation/destination receives a message."""
+        try:
+            if self._journey_store is None:
+                return
+            msg_id = str(getattr(message, "id", ""))
+            trace_id = self._trace_ids.get(msg_id, msg_id)
+            stage = "DELIVERED" if component_type == "destination" else "RECEIVED"
+            label = self._resolve_label(component_id)
+            channel = self._find_receive_channel(component_id, trace_id)
+            self._journey_store.add_step(trace_id, JourneyStep(
+                stage=stage,
+                component_id=component_id,
+                component_type=component_type,
+                channel=channel,
+                message_id=msg_id,
+                parent_message_id=self._get_parent_id(msg_id),
+                label=label,
+            ))
+        except Exception as e:
+            logger.debug("Observatory hook error", hook="on_message_received", error=str(e))
+
+    async def on_message_processed(
+        self,
+        component_id: str,
+        component_type: str,
+        input_message: Message,
+        output_messages: list[Message],
+        output_channel: str,
+    ) -> None:
+        """Called after a transformation has produced its outputs."""
+        try:
+            input_id = str(getattr(input_message, "id", ""))
+            trace_id = self._trace_ids.get(input_id, input_id)
+
+            if self._journey_store is not None:
+                label = self._resolve_label(component_id)
+                self._journey_store.add_step(trace_id, JourneyStep(
+                    stage="PROCESSED",
+                    component_id=component_id,
+                    component_type=component_type,
+                    channel=output_channel,
+                    message_id=input_id,
+                    parent_message_id=self._get_parent_id(input_id),
+                    label=label,
+                ))
+
+            # Link output messages to the same trace_id + parent relationship
+            for out_msg in output_messages:
+                out_id = str(getattr(out_msg, "id", ""))
+                if out_id and out_id != input_id:
+                    self._set_trace_id(out_id, trace_id)
+                    self._set_parent_id(out_id, input_id)
+        except Exception as e:
+            logger.debug("Observatory hook error", hook="on_message_processed", error=str(e))
 
     async def on_component_state_change(
         self,
@@ -191,6 +388,21 @@ class ObservatoryBridge:
             await self._ws.broadcast_event("error.occurred", event.data)
         except Exception as e:
             logger.debug("Observatory hook error", hook="on_error", error=str(e))
+
+    # --- Message Inspector ---
+
+    def get_message_detail(self, message_id: str) -> dict | None:
+        """Return complete message detail + journey for the WS handler."""
+        if self._message_store is None:
+            return None
+        detail = self._message_store.get(message_id)
+        if detail is None:
+            return None
+        trace_id = detail.get("trace_id", message_id)
+        journey: list[dict] = []
+        if self._journey_store is not None:
+            journey = self._journey_store.get_journey(trace_id) or []
+        return {**detail, "journey": journey}
 
     # --- Control Interface (Bridge -> Framework) ---
     # Stub methods. Will be wired in Phase 4 (Debug Controller).

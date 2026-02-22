@@ -6,6 +6,7 @@ import { useMessagesStore } from './messages'
 import { useMetricsStore } from './metrics'
 import { useDebugStore } from './debug'
 import { usePipelineStore } from './pipeline'
+import { useInspectorStore } from './inspector'
 
 export const useConnectionStore = defineStore('connection', () => {
   const ws = ref<WebSocket | null>(null)
@@ -93,6 +94,7 @@ export const useConnectionStore = defineStore('connection', () => {
     const metricsStore = useMetricsStore()
     const debugStore = useDebugStore()
     const pipelineStore = usePipelineStore()
+    const inspectorStore = useInspectorStore()
 
     switch (msg.type) {
       case 'connected':
@@ -144,6 +146,10 @@ export const useConnectionStore = defineStore('connection', () => {
       case 'debug.resumed':
       case 'debug.step_result':
         debugStore.updateFromServer(msg.payload as any)
+        break
+
+      case 'message.detail':
+        inspectorStore.setDetail(msg.payload as any)
         break
 
       case 'error.occurred':
