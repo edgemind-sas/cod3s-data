@@ -1,4 +1,4 @@
-"""Unit tests for file sources (FileSource, CSVSource, CSVWatchSource)."""
+"""Unit tests for file sources (FileSource, CSVSource, CSVWatchSource, DirectoryWatchSource)."""
 
 import asyncio
 import contextlib
@@ -9,7 +9,7 @@ import pytest
 
 from cod3s_data.broker import InMemoryBroker
 from cod3s_data.core.message import Message
-from cod3s_data.sources import CSVSource, CSVWatchSource, FileSource
+from cod3s_data.sources import CSVSource, CSVWatchSource, DirectoryWatchSource, FileSource
 
 
 class TestFileSource:
@@ -718,6 +718,278 @@ class TestCSVWatchSource:
 
         assert not source.is_running
 
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+
+class TestDirectoryWatchSource:
+    """Test DirectoryWatchSource."""
+
+    @pytest.mark.asyncio
+    async def test_detects_new_file(self, tmp_path: Path):
+        """A file added after start() is detected and a message is emitted."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.15)
+
+        # No messages yet (empty directory)
+        assert len(received) == 0
+
+        # Create a new file
+        (tmp_path / "data_001.csv").write_text("hello")
+        await asyncio.sleep(0.25)
+
+        assert len(received) == 1
+        assert received[0].value["name"] == "data_001.csv"
+
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_ignores_existing_files(self, tmp_path: Path):
+        """Files present at startup do not generate messages (default)."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        # Create files before starting the source
+        (tmp_path / "existing1.txt").write_text("a")
+        (tmp_path / "existing2.txt").write_text("b")
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.25)
+
+        # No messages — existing files are ignored
+        assert len(received) == 0
+
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_emit_existing(self, tmp_path: Path):
+        """With emit_existing=True, existing files are emitted at startup."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        (tmp_path / "a.txt").write_text("aaa")
+        (tmp_path / "b.txt").write_text("bbb")
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+            emit_existing=True,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.25)
+
+        assert len(received) == 2
+        names = {m.value["name"] for m in received}
+        assert names == {"a.txt", "b.txt"}
+
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_glob_pattern_filter(self, tmp_path: Path):
+        """Only files matching the glob pattern are detected."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+            glob_pattern="*.csv",
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.15)
+
+        # Create one matching and one non-matching file
+        (tmp_path / "data.csv").write_text("csv data")
+        (tmp_path / "data.json").write_text("{}")
+        await asyncio.sleep(0.25)
+
+        # Only the .csv file should be detected
+        assert len(received) == 1
+        assert received[0].value["name"] == "data.csv"
+
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_message_content(self, tmp_path: Path):
+        """The message value contains name, path, and size."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.15)
+
+        file_content = "hello world"
+        (tmp_path / "test.txt").write_text(file_content)
+        await asyncio.sleep(0.25)
+
+        assert len(received) == 1
+        msg = received[0]
+
+        # Check key
+        assert msg.key == "files.new"
+
+        # Check value fields
+        assert msg.value["name"] == "test.txt"
+        assert msg.value["path"] == str((tmp_path / "test.txt").resolve())
+        assert msg.value["size"] == len(file_content)
+
+        # Check tags is empty dict
+        assert msg.tags == {}
+
+        # Check timestamp is set
+        assert msg.timestamp is not None
+
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_not_a_directory_error(self, tmp_path: Path):
+        """NotADirectoryError is raised if the path is not a directory."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        # Point to a file, not a directory
+        file_path = tmp_path / "not_a_dir.txt"
+        file_path.write_text("I am a file")
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=file_path,
+            poll_interval=0.1,
+        )
+
+        with pytest.raises(NotADirectoryError):
+            await source.start()
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_multiple_new_files(self, tmp_path: Path):
+        """Multiple files added at once are all detected."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("files.new", callback)
+
+        source = DirectoryWatchSource(
+            broker=broker,
+            channel="files.new",
+            directory=tmp_path,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.15)
+
+        # Create multiple files at once
+        (tmp_path / "file_a.txt").write_text("a")
+        (tmp_path / "file_b.txt").write_text("bb")
+        (tmp_path / "file_c.txt").write_text("ccc")
+        await asyncio.sleep(0.25)
+
+        assert len(received) == 3
+        names = sorted(m.value["name"] for m in received)
+        assert names == ["file_a.txt", "file_b.txt", "file_c.txt"]
+
+        await source.stop()
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task

@@ -409,3 +409,96 @@ class CSVWatchSource(Source):
         }
 
         return Message(key=key, timestamp=timestamp, value=value, tags=tags)
+
+
+class DirectoryWatchSource(Source):
+    """
+    Watch a directory for new files (REALTIME mode).
+
+    Polls a directory at a configurable interval and emits a message
+    for each new file detected. Useful for detecting incoming data files
+    (logs, sensor exports, G-code, etc.) in IoT/industrial contexts.
+
+    Features:
+    - Glob pattern filtering (e.g. ``"*.csv"``, ``"*.gcode"``)
+    - Optional emission of files already present at startup
+    - Detection by filename (compares sets of names between polls)
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        channel: str,
+        directory: str | Path,
+        poll_interval: float = 1.0,
+        glob_pattern: str = "*",
+        emit_existing: bool = False,
+        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,
+    ) -> None:
+        """
+        Initialize directory watch source.
+
+        Args:
+            broker: Message broker
+            channel: Target channel
+            directory: Path to the directory to watch
+            poll_interval: Seconds between directory polls
+            glob_pattern: Glob pattern to filter files (e.g. ``"*.csv"``)
+            emit_existing: If True, emit messages for files already present at startup
+            delivery_guarantee: Delivery guarantee
+        """
+        super().__init__(broker, channel, BatchMode.REALTIME, delivery_guarantee)
+        self.directory = Path(directory)
+        self.poll_interval = poll_interval
+        self.glob_pattern = glob_pattern
+        self.emit_existing = emit_existing
+
+    async def produce(self) -> AsyncIterator[Message]:
+        """Watch directory and yield messages for each new file."""
+        if not self.directory.is_dir():
+            raise NotADirectoryError(f"Not a directory: {self.directory}")
+
+        # Initial scan — memorize existing files
+        known_files = {p.name for p in self.directory.glob(self.glob_pattern) if p.is_file()}
+
+        if self.emit_existing:
+            for path in sorted(self.directory.glob(self.glob_pattern)):
+                if path.is_file():
+                    yield self._file_to_message(path)
+
+        # Polling loop
+        while self._running:
+            await asyncio.sleep(self.poll_interval)
+            current_files = {p.name for p in self.directory.glob(self.glob_pattern) if p.is_file()}
+            new_files = current_files - known_files
+
+            for name in sorted(new_files):
+                path = self.directory / name
+                if path.is_file():
+                    yield self._file_to_message(path)
+
+            known_files = current_files
+
+    def _file_to_message(self, path: Path) -> Message:
+        """Build a Message from a file's metadata.
+
+        Args:
+            path: Path to the file.
+
+        Returns:
+            Message with file name, absolute path, and size in value.
+        """
+        stat = path.stat()
+        # Use st_birthtime if available (macOS), otherwise st_ctime
+        ctime = getattr(stat, "st_birthtime", stat.st_ctime)
+        timestamp = datetime.fromtimestamp(ctime, tz=UTC)
+        return Message(
+            key=self.channel,
+            timestamp=timestamp,
+            value={
+                "name": path.name,
+                "path": str(path.resolve()),
+                "size": stat.st_size,
+            },
+            tags={},
+        )
