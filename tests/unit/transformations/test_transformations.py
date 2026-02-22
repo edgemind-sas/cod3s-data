@@ -1,7 +1,7 @@
 """Unit tests for transformations."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,6 +10,7 @@ from cod3s_data.core.message import Message
 from cod3s_data.destinations import CollectDestination
 from cod3s_data.transformations import (
     AggregateTransform,
+    AlarmTransform,
     FilterTransform,
     MapTransform,
     StatefulTransform,
@@ -18,7 +19,7 @@ from cod3s_data.transformations import (
 
 
 def create_message(key: str = "test", value: float = 42.0) -> Message:
-    return Message(key=key, timestamp=datetime.now(timezone.utc), value=value, tags={})
+    return Message(key=key, timestamp=datetime.now(UTC), value=value, tags={})
 
 
 class TestStatelessTransform:
@@ -191,9 +192,7 @@ class TestMapTransform:
         dest = CollectDestination(broker, "output.channel")
         await dest.start()
 
-        transform = MapTransform(
-            broker, "input.channel", "output.channel", lambda x: f"value_{x}"
-        )
+        transform = MapTransform(broker, "input.channel", "output.channel", lambda x: f"value_{x}")
         await transform.start()
 
         await broker.publish("input.channel", create_message(value=42))
@@ -346,6 +345,208 @@ class TestStatefulTransform:
         await broker.stop()
 
 
+class TestAlarmTransform:
+    @pytest.mark.asyncio
+    async def test_alarm_max_exceeded(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(broker, "input.channel", "alarms.channel", max_value=100.0)
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(key="temp", value=105.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 1
+        assert messages[0].key == "temp.alarm"
+        assert messages[0].value["original_value"] == 105.0
+        assert messages[0].value["alarm_type"] == "max"
+        assert messages[0].value["threshold"] == 100.0
+        assert messages[0].value["status"] == "ACTIVE"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_alarm_min_exceeded(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(broker, "input.channel", "alarms.channel", min_value=10.0)
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(key="temp", value=5.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 1
+        assert messages[0].value["alarm_type"] == "min"
+        assert messages[0].value["threshold"] == 10.0
+        assert messages[0].value["status"] == "ACTIVE"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_alarm_cleared(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(broker, "input.channel", "alarms.channel", max_value=100.0)
+        await transform.start()
+
+        # Trigger alarm
+        await broker.publish("input.channel", create_message(key="temp", value=105.0))
+        await asyncio.sleep(0.1)
+        # Return to normal
+        await broker.publish("input.channel", create_message(key="temp", value=80.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 2
+        assert messages[0].value["status"] == "ACTIVE"
+        assert messages[1].value["status"] == "CLEARED"
+        assert messages[1].value["alarm_type"] == "max"
+        assert messages[1].value["threshold"] == 100.0
+        assert messages[1].value["original_value"] == 80.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_message_when_normal(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(
+            broker, "input.channel", "alarms.channel", min_value=0.0, max_value=100.0
+        )
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(value=50.0))
+        await broker.publish("input.channel", create_message(value=75.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_message_when_still_in_alarm(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(broker, "input.channel", "alarms.channel", max_value=100.0)
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(value=105.0))
+        await broker.publish("input.channel", create_message(value=110.0))
+        await broker.publish("input.channel", create_message(value=120.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 1  # Only the first ACTIVE, no repeats
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_min_and_max(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(
+            broker, "input.channel", "alarms.channel", min_value=10.0, max_value=90.0
+        )
+        await transform.start()
+
+        # Max alarm
+        await broker.publish("input.channel", create_message(value=95.0))
+        await asyncio.sleep(0.1)
+        # Clear
+        await broker.publish("input.channel", create_message(value=50.0))
+        await asyncio.sleep(0.1)
+        # Min alarm
+        await broker.publish("input.channel", create_message(value=5.0))
+        await asyncio.sleep(0.1)
+        # Clear
+        await broker.publish("input.channel", create_message(value=50.0))
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 4
+        assert messages[0].value["alarm_type"] == "max"
+        assert messages[0].value["status"] == "ACTIVE"
+        assert messages[1].value["status"] == "CLEARED"
+        assert messages[2].value["alarm_type"] == "min"
+        assert messages[2].value["status"] == "ACTIVE"
+        assert messages[3].value["status"] == "CLEARED"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_requires_at_least_one_threshold(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError, match="at least one"):
+            AlarmTransform(broker, "input.channel", "alarms.channel")
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_value_ignored(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "alarms.channel")
+        await dest.start()
+
+        transform = AlarmTransform(broker, "input.channel", "alarms.channel", max_value=100.0)
+        await transform.start()
+
+        await broker.publish(
+            "input.channel",
+            Message(
+                key="test",
+                timestamp=datetime.now(UTC),
+                value="not a number",
+                tags={},
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+
 class TestTransformationChaining:
     @pytest.mark.asyncio
     async def test_filter_then_map(self):
@@ -360,9 +561,7 @@ class TestTransformationChaining:
         )
         await filter_transform.start()
 
-        map_transform = MapTransform(
-            broker, "filtered.channel", "final.channel", lambda x: x * 2
-        )
+        map_transform = MapTransform(broker, "filtered.channel", "final.channel", lambda x: x * 2)
         await map_transform.start()
 
         for i in range(10):

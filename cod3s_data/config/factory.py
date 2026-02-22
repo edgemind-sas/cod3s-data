@@ -10,11 +10,17 @@ from cod3s_data.destinations.collect import CollectDestination
 from cod3s_data.destinations.core import ConsoleDestination, FileDestination, InMemoryDestination
 from cod3s_data.destinations.influxdb import InfluxDBDestination
 from cod3s_data.sources.base import Source
-from cod3s_data.sources.file_sources import CSVSource, CSVWatchSource, FileSource
+from cod3s_data.sources.file_sources import (
+    CSVSource,
+    CSVWatchSource,
+    DirectoryWatchSource,
+    FileSource,
+)
 from cod3s_data.sources.test_sources import RandomSource, SequenceSource
 from cod3s_data.transformations.base import Transformation
 from cod3s_data.transformations.builtin import (
     AggregateTransform,
+    AlarmTransform,
     FilterTransform,
     MapTransform,
 )
@@ -31,11 +37,13 @@ class ComponentFactory:
             "file": FileSource,
             "csv": CSVSource,
             "csv_watch": CSVWatchSource,
+            "directory_watch": DirectoryWatchSource,
         }
         self._transform_registry: dict[str, Callable[..., Transformation]] = {
             "filter": self._create_filter_transform,
             "map": self._create_map_transform,
             "aggregate": self._create_aggregate_transform,
+            "alarm": self._create_alarm_transform,
         }
         self._destination_registry: dict[str, Callable[..., Destination]] = {
             "console": ConsoleDestination,
@@ -200,3 +208,13 @@ class ComponentFactory:
             kwargs["aggregation_fn"] = aggregation_fn
 
         return AggregateTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_alarm_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> AlarmTransform:
+        """Create AlarmTransform from config."""
+        return AlarmTransform(broker, input_channels, output_channel, **kwargs)
