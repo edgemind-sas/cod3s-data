@@ -8,6 +8,7 @@ from cod3s_data.config.models import DestinationConfig, SourceConfig, TransformC
 from cod3s_data.destinations.base import Destination
 from cod3s_data.destinations.collect import CollectDestination
 from cod3s_data.destinations.core import ConsoleDestination, FileDestination, InMemoryDestination
+from cod3s_data.destinations.influxdb import InfluxDBDestination
 from cod3s_data.sources.base import Source
 from cod3s_data.sources.file_sources import CSVSource, CSVWatchSource, FileSource
 from cod3s_data.sources.test_sources import RandomSource, SequenceSource
@@ -41,6 +42,7 @@ class ComponentFactory:
             "file": FileDestination,
             "inmemory": InMemoryDestination,
             "collect": CollectDestination,
+            "influxdb": InfluxDBDestination,
         }
 
     def create_source(self, config: SourceConfig) -> Source:

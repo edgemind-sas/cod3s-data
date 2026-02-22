@@ -39,6 +39,9 @@ observatory = [
     "uvicorn[standard]>=0.34,<1.0",
     "websockets>=14.0,<15.0",
 ]
+influxdb = [
+    "influxdb-client[async]>=1.40,<2.0",
+]
 dev = [
     "pytest>=8.0,<9.0",
     "pytest-asyncio>=0.23,<1.0",
@@ -101,6 +104,10 @@ ignore_missing_imports = true
 module = "msgspec.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "influxdb_client.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -112,6 +119,9 @@ addopts = [
     "--cov=cod3s_data",
     "--cov-report=term-missing",
     "--cov-report=html",
+]
+markers = [
+    "integration: tests requiring external services (e.g. Docker)",
 ]
 
 [tool.coverage.run]

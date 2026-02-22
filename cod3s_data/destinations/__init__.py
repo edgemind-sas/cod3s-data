@@ -7,6 +7,7 @@ from cod3s_data.destinations.core import (
     FileDestination,
     InMemoryDestination,
 )
+from cod3s_data.destinations.influxdb import InfluxDBDestination
 
 __all__ = [
     "Destination",
@@ -15,4 +16,5 @@ __all__ = [
     "FileDestination",
     "InMemoryDestination",
     "CollectDestination",
+    "InfluxDBDestination",
 ]
