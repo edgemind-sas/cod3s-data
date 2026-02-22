@@ -1,9 +1,13 @@
 """File-based data sources for COD3S Data Framework."""
 
+import asyncio
+import csv
+import io
 import json
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
 from cod3s_data.core.message import Message
@@ -70,9 +74,9 @@ class FileSource(Source):
         if timestamp_str:
             timestamp = datetime.fromisoformat(timestamp_str)
             if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                timestamp = timestamp.replace(tzinfo=UTC)
         else:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
 
         return Message(
             key=data.get("key", "unknown"),
@@ -84,9 +88,15 @@ class FileSource(Source):
 
 class CSVSource(Source):
     """
-    Read messages from CSV files (BATCH mode).
+    Read messages from CSV files (BATCH or TRANSPOSE mode).
 
     Uses polars for performance, falls back to pandas if not available.
+
+    Features:
+    - Custom delimiter, encoding, skip_rows, has_header, max_rows
+    - Multi-value columns (value_columns → dict value)
+    - Column exclusion (exclude_columns)
+    - Temporal replay with speed_factor
     """
 
     def __init__(
@@ -94,11 +104,24 @@ class CSVSource(Source):
         broker: Broker,
         channel: str,
         file_path: str | Path,
+        # --- Column mapping ---
         key_column: str = "key",
         timestamp_column: str = "timestamp",
         value_column: str = "value",
         tag_columns: list[str] | None = None,
         delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,
+        # --- CSV reading ---
+        delimiter: str = ",",
+        encoding: str = "utf-8",
+        skip_rows: int = 0,
+        has_header: bool = True,
+        max_rows: int | None = None,
+        # --- Column selection ---
+        value_columns: list[str] | None = None,
+        exclude_columns: list[str] | None = None,
+        # --- Replay ---
+        replay: bool = False,
+        speed_factor: float = 1.0,
     ) -> None:
         """
         Initialize CSV source.
@@ -109,62 +132,276 @@ class CSVSource(Source):
             file_path: Path to CSV file
             key_column: Column name for message key
             timestamp_column: Column name for timestamp
-            value_column: Column name for value
+            value_column: Column name for value (ignored if value_columns is set)
             tag_columns: Column names to include as tags
             delivery_guarantee: Delivery guarantee
+            delimiter: CSV separator (e.g. ";" for EGM files)
+            encoding: File encoding (e.g. "latin-1")
+            skip_rows: Number of rows to skip before header
+            has_header: False if file has no header row (columns named column_0, column_1...)
+            max_rows: Maximum number of data rows to read
+            value_columns: Multiple columns to pack as dict value (takes priority over value_column)
+            exclude_columns: Columns to exclude from value, tags, key, and timestamp
+            replay: Enable temporal replay (sleep between messages based on timestamps)
+            speed_factor: Replay speed multiplier (10.0 = 10x faster)
         """
-        super().__init__(broker, channel, BatchMode.BATCH, delivery_guarantee)
+        batch_mode = BatchMode.TRANSPOSE if replay else BatchMode.BATCH
+        super().__init__(broker, channel, batch_mode, delivery_guarantee)
         self.file_path = Path(file_path)
         self.key_column = key_column
         self.timestamp_column = timestamp_column
         self.value_column = value_column
         self.tag_columns = tag_columns or []
+        self.delimiter = delimiter
+        self.encoding = encoding
+        self.skip_rows = skip_rows
+        self.has_header = has_header
+        self.max_rows = max_rows
+        self.value_columns = value_columns
+        self.exclude_columns = set(exclude_columns) if exclude_columns else set()
+        self.replay = replay
+        self.speed_factor = speed_factor
 
-    async def produce(self) -> AsyncIterator[Message]:
-        """Read CSV and yield messages."""
-        if not self.file_path.exists():
-            raise FileNotFoundError(f"File not found: {self.file_path}")
+    def _read_csv_rows(self) -> list[dict[str, Any]]:
+        """Read CSV file and return list of row dicts.
 
-        # Try polars first (fast)
+        Uses polars for performance. For non-utf8 encodings, reads the file
+        with Python's open() first then passes content to polars via StringIO.
+        Falls back to pandas if polars is not available.
+        """
+        is_utf8 = self.encoding.lower().replace("-", "") == "utf8"
+
         try:
             import polars as pl
 
-            df = pl.read_csv(str(self.file_path))
+            if is_utf8:
+                df = pl.read_csv(
+                    str(self.file_path),
+                    separator=self.delimiter,
+                    skip_rows=self.skip_rows,
+                    has_header=self.has_header,
+                    n_rows=self.max_rows,
+                )
+            else:
+                # polars only supports utf-8; decode with Python first
+                content = self.file_path.read_text(encoding=self.encoding)
+                # Skip rows manually from the decoded content
+                if self.skip_rows:
+                    lines = content.split("\n")
+                    content = "\n".join(lines[self.skip_rows :])
+                df = pl.read_csv(
+                    io.StringIO(content),
+                    separator=self.delimiter,
+                    has_header=self.has_header,
+                    n_rows=self.max_rows,
+                )
 
-            for row in df.iter_rows(named=True):
-                yield self._parse_row(row)
+            if not self.has_header:
+                df.columns = [f"column_{i}" for i in range(len(df.columns))]
+            return list(df.iter_rows(named=True))
 
         except ImportError:
-            # Fall back to pandas
-            import pandas as pd
+            pass
 
-            df = pd.read_csv(str(self.file_path))
+        # Fall back to pandas (supports all encodings)
+        import pandas as pd  # type: ignore[import-untyped]
 
-            for _, row in df.iterrows():
-                yield self._parse_row(row.to_dict())
+        df = pd.read_csv(
+            str(self.file_path),
+            sep=self.delimiter,
+            encoding=self.encoding,
+            skiprows=self.skip_rows if self.skip_rows else None,
+            header=0 if self.has_header else None,
+            nrows=self.max_rows,
+        )
+        if not self.has_header:
+            df.columns = [f"column_{i}" for i in range(len(df.columns))]
+        return [row.to_dict() for _, row in df.iterrows()]
+
+    async def produce(self) -> AsyncIterator[Message]:
+        """Read CSV and yield messages, with optional temporal replay."""
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"File not found: {self.file_path}")
+
+        rows = self._read_csv_rows()
+
+        prev_ts: datetime | None = None
+        for row in rows:
+            message = self._parse_row(row)
+
+            if self.replay and prev_ts is not None:
+                delta = (message.timestamp - prev_ts).total_seconds() / self.speed_factor
+                if delta > 0:
+                    await asyncio.sleep(delta)
+
+            prev_ts = message.timestamp
+            yield message
 
     def _parse_row(self, row: dict[str, Any]) -> Message:
-        """Parse message from CSV row."""
-        # Extract fields
+        """Parse message from CSV row, respecting exclude_columns and value_columns."""
+        # Filter out excluded columns
+        if self.exclude_columns:
+            row = {k: v for k, v in row.items() if k not in self.exclude_columns}
+
+        # Extract key
         key = str(row.get(self.key_column, "unknown"))
 
         # Parse timestamp
         timestamp_str = row.get(self.timestamp_column)
         if timestamp_str:
-            # Try ISO format first
             try:
                 timestamp = datetime.fromisoformat(str(timestamp_str))
             except (ValueError, TypeError):
-                # Fall back to current time
-                timestamp = datetime.now(timezone.utc)
+                timestamp = datetime.now(UTC)
 
             if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                timestamp = timestamp.replace(tzinfo=UTC)
         else:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
+
+        # Extract value: multi-column dict or single column
+        if self.value_columns:
+            value: Any = {col: row[col] for col in self.value_columns if col in row}
+        else:
+            value = row.get(self.value_column)
+
+        # Extract tags (exclude columns already used for key/timestamp/value)
+        tags = {
+            col: str(row[col]) for col in self.tag_columns if col in row and row[col] is not None
+        }
+
+        return Message(key=key, timestamp=timestamp, value=value, tags=tags)
+
+
+class CSVWatchSource(Source):
+    """
+    Watch a CSV file for new lines (REALTIME mode).
+
+    Reads the entire file on start, then polls for new lines at a configurable interval.
+    Uses csv.reader for incremental reading.
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        channel: str,
+        file_path: str | Path,
+        poll_interval: float = 1.0,
+        # --- Column mapping (same as CSVSource) ---
+        key_column: str = "key",
+        timestamp_column: str = "timestamp",
+        value_column: str = "value",
+        value_columns: list[str] | None = None,
+        tag_columns: list[str] | None = None,
+        delimiter: str = ",",
+        encoding: str = "utf-8",
+        has_header: bool = True,
+        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,
+    ) -> None:
+        """
+        Initialize CSV watch source.
+
+        Args:
+            broker: Message broker
+            channel: Target channel
+            file_path: Path to CSV file to watch
+            poll_interval: Seconds between file polls
+            key_column: Column name for message key
+            timestamp_column: Column name for timestamp
+            value_column: Column name for value (ignored if value_columns is set)
+            value_columns: Multiple columns to pack as dict value
+            tag_columns: Column names to include as tags
+            delimiter: CSV separator
+            encoding: File encoding
+            has_header: Whether file has a header row
+            delivery_guarantee: Delivery guarantee
+        """
+        super().__init__(broker, channel, BatchMode.REALTIME, delivery_guarantee)
+        self.file_path = Path(file_path)
+        self.poll_interval = poll_interval
+        self.key_column = key_column
+        self.timestamp_column = timestamp_column
+        self.value_column = value_column
+        self.value_columns = value_columns
+        self.tag_columns = tag_columns or []
+        self.delimiter = delimiter
+        self.encoding = encoding
+        self.has_header = has_header
+        self._headers: list[str] = []
+        self._file_position: int = 0
+
+    async def produce(self) -> AsyncIterator[Message]:
+        """Watch CSV file and yield messages as new lines appear."""
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"File not found: {self.file_path}")
+
+        # Initial read: emit all existing content
+        with open(self.file_path, encoding=self.encoding, newline="") as f:
+            reader = csv.reader(f, delimiter=self.delimiter)
+            if self.has_header:
+                self._headers = next(reader)
+            else:
+                # Read first row to determine column count, then process it
+                first_row = next(reader, None)
+                if first_row:
+                    self._headers = [f"column_{i}" for i in range(len(first_row))]
+                    yield self._parse_csv_row(first_row)
+
+            for csv_row in reader:
+                if csv_row:
+                    yield self._parse_csv_row(csv_row)
+
+            self._file_position = f.tell()
+
+        # Poll loop: check for new lines
+        while self._running:
+            await asyncio.sleep(self.poll_interval)
+
+            with open(self.file_path, encoding=self.encoding, newline="") as f:
+                f.seek(self._file_position)
+                new_content = f.read()
+                new_position = f.tell()
+
+            if new_content.strip():
+                reader = csv.reader(io.StringIO(new_content), delimiter=self.delimiter)
+                for csv_row in reader:
+                    if csv_row:
+                        yield self._parse_csv_row(csv_row)
+
+                self._file_position = new_position
+
+    def _parse_csv_row(self, csv_row: list[str]) -> Message:
+        """Parse a raw CSV row (list of strings) into a Message."""
+        row: dict[str, Any] = dict(zip(self._headers, csv_row, strict=False))
+
+        # Extract key
+        key = str(row.get(self.key_column, "unknown"))
+
+        # Parse timestamp
+        timestamp_str = row.get(self.timestamp_column)
+        if timestamp_str:
+            try:
+                timestamp = datetime.fromisoformat(str(timestamp_str))
+            except (ValueError, TypeError):
+                timestamp = datetime.now(UTC)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+        else:
+            timestamp = datetime.now(UTC)
 
         # Extract value
-        value = row.get(self.value_column)
+        if self.value_columns:
+            value: Any = {col: row[col] for col in self.value_columns if col in row}
+        else:
+            raw = row.get(self.value_column)
+            # Try to convert to float for numeric values
+            if raw is not None:
+                try:
+                    value = float(raw)
+                except (ValueError, TypeError):
+                    value = raw
+            else:
+                value = raw
 
         # Extract tags
         tags = {

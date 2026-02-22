@@ -1,6 +1,7 @@
 """Component factory for COD3S Data Framework."""
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from cod3s_data.broker.base import Broker
 from cod3s_data.config.models import DestinationConfig, SourceConfig, TransformConfig
@@ -8,7 +9,7 @@ from cod3s_data.destinations.base import Destination
 from cod3s_data.destinations.collect import CollectDestination
 from cod3s_data.destinations.core import ConsoleDestination, FileDestination, InMemoryDestination
 from cod3s_data.sources.base import Source
-from cod3s_data.sources.file_sources import CSVSource, FileSource
+from cod3s_data.sources.file_sources import CSVSource, CSVWatchSource, FileSource
 from cod3s_data.sources.test_sources import RandomSource, SequenceSource
 from cod3s_data.transformations.base import Transformation
 from cod3s_data.transformations.builtin import (
@@ -28,6 +29,7 @@ class ComponentFactory:
             "sequence": SequenceSource,
             "file": FileSource,
             "csv": CSVSource,
+            "csv_watch": CSVWatchSource,
         }
         self._transform_registry: dict[str, Callable[..., Transformation]] = {
             "filter": self._create_filter_transform,

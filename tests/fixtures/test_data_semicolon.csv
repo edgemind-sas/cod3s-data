@@ -1,0 +1,4 @@
+key;timestamp;value;sensor;location
+temperature;2024-01-15T10:00:00Z;25.5;TH001;room1
+temperature;2024-01-15T10:01:00Z;26.0;TH001;room1
+humidity;2024-01-15T10:00:00Z;65.0;HU001;room1

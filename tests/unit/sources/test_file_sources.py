@@ -1,13 +1,15 @@
-"""Unit tests for file sources (FileSource, CSVSource)."""
+"""Unit tests for file sources (FileSource, CSVSource, CSVWatchSource)."""
 
 import asyncio
+import contextlib
+import time
 from pathlib import Path
 
 import pytest
 
 from cod3s_data.broker import InMemoryBroker
 from cod3s_data.core.message import Message
-from cod3s_data.sources import CSVSource, FileSource
+from cod3s_data.sources import CSVSource, CSVWatchSource, FileSource
 
 
 class TestFileSource:
@@ -230,6 +232,495 @@ class TestCSVSource:
 
         with pytest.raises(FileNotFoundError):
             await source.start()
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_delimiter(self):
+        """Test CSVSource with semicolon delimiter."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data_semicolon.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            delimiter=";",
+            tag_columns=["sensor", "location"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 3
+        assert received[0].key == "temperature"
+        assert received[0].value == 25.5
+        assert received[0].tags["sensor"] == "TH001"
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_max_rows(self):
+        """Test CSVSource with max_rows limit."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            max_rows=2,
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 2
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_value_columns(self):
+        """Test CSVSource with value_columns producing dict values."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            value_columns=["value", "sensor"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 4
+        # value should be a dict with both columns
+        assert isinstance(received[0].value, dict)
+        assert received[0].value["value"] == 25.5
+        assert received[0].value["sensor"] == "TH001"
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_value_columns_priority_over_value_column(self):
+        """Test that value_columns takes priority over value_column."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            value_column="value",
+            value_columns=["value", "sensor"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        # value_columns should take priority → dict value
+        assert isinstance(received[0].value, dict)
+        assert "value" in received[0].value
+        assert "sensor" in received[0].value
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_exclude_columns(self):
+        """Test CSVSource with exclude_columns."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            tag_columns=["sensor", "location"],
+            exclude_columns=["location"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        # location should be excluded from tags
+        assert "location" not in received[0].tags
+        assert "sensor" in received[0].tags
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_skip_rows(self):
+        """Test CSVSource with skip_rows."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        # Create a CSV fixture with extra rows at the top
+        import tempfile
+
+        csv_content = (
+            "# comment line 1\n"
+            "# comment line 2\n"
+            "key,timestamp,value\n"
+            "temperature,2024-01-15T10:00:00Z,25.5\n"
+            "humidity,2024-01-15T10:00:00Z,65.0\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=tmp_path,
+            skip_rows=2,
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 2
+        assert received[0].key == "temperature"
+        assert received[1].key == "humidity"
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_no_header(self):
+        """Test CSVSource with has_header=False (columns named by position)."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data_noheader.csv"
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            has_header=False,
+            key_column="column_0",
+            timestamp_column="column_1",
+            value_column="column_2",
+            tag_columns=["column_3"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 2
+        assert received[0].key == "temperature"
+        assert received[1].key == "humidity"
+        assert received[0].tags["column_3"] == "TH001"
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_encoding(self):
+        """Test CSVSource with non-utf8 encoding (latin-1)."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        import tempfile
+
+        csv_content = (
+            "key,timestamp,value,label\ntempérature,2024-01-15T10:00:00Z,25.5,capteur café\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, encoding="latin-1"
+        ) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=tmp_path,
+            encoding="latin-1",
+            tag_columns=["label"],
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        assert received[0].key == "température"
+        assert received[0].tags["label"] == "capteur café"
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_replay(self):
+        """Test CSVSource replay mode adds delay between messages."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        # Create CSV with 1-second gaps between timestamps
+        import tempfile
+
+        csv_content = (
+            "key,timestamp,value\n"
+            "t,2024-01-15T10:00:00Z,1\n"
+            "t,2024-01-15T10:00:01Z,2\n"
+            "t,2024-01-15T10:00:02Z,3\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=tmp_path,
+            replay=True,
+            speed_factor=100.0,  # 100x speed to keep test fast
+        )
+
+        start = time.monotonic()
+        await source.start()
+        elapsed = time.monotonic() - start
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 3
+        # 2 seconds total delay at 100x speed = 0.02s minimum
+        assert elapsed >= 0.01
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_source_replay_speed_factor(self):
+        """Test CSVSource replay speed_factor controls delay."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        import tempfile
+
+        csv_content = "key,timestamp,value\nt,2024-01-15T10:00:00Z,1\nt,2024-01-15T10:00:10Z,2\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        # At 1000x speed, 10 seconds → 0.01s
+        source = CSVSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=tmp_path,
+            replay=True,
+            speed_factor=1000.0,
+        )
+
+        start = time.monotonic()
+        await source.start()
+        elapsed = time.monotonic() - start
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 2
+        # Should be fast (~0.01s), not 10s
+        assert elapsed < 1.0
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+
+class TestCSVWatchSource:
+    """Test CSVWatchSource."""
+
+    @pytest.mark.asyncio
+    async def test_csv_watch_initial_read(self):
+        """Test CSVWatchSource reads existing file on start."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+
+        source = CSVWatchSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=fixture_path,
+            poll_interval=0.1,
+            tag_columns=["sensor", "location"],
+        )
+
+        # Start source and stop after initial read
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.2)
+        await source.stop()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Should have received all 4 existing messages
+        assert len(received) == 4
+        assert received[0].key == "temperature"
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_watch_detects_new_lines(self, tmp_path: Path):
+        """Test CSVWatchSource detects and emits new lines added to file."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+
+        async def callback(msg: Message):
+            received.append(msg)
+
+        broker.subscribe("test.channel", callback)
+
+        # Create initial CSV
+        csv_file = tmp_path / "watch_test.csv"
+        csv_file.write_text("key,timestamp,value\ntemperature,2024-01-15T10:00:00Z,25.5\n")
+
+        source = CSVWatchSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=csv_file,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.2)
+
+        # Should have received 1 message from initial read
+        assert len(received) == 1
+
+        # Append new line
+        with open(csv_file, "a") as f:
+            f.write("humidity,2024-01-15T10:01:00Z,65.0\n")
+
+        # Wait for poll to pick it up
+        await asyncio.sleep(0.3)
+
+        assert len(received) == 2
+        assert received[1].key == "humidity"
+
+        await source.stop()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_csv_watch_stop(self, tmp_path: Path):
+        """Test CSVWatchSource stops properly."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        csv_file = tmp_path / "watch_stop.csv"
+        csv_file.write_text("key,timestamp,value\nt,2024-01-15T10:00:00Z,1\n")
+
+        source = CSVWatchSource(
+            broker=broker,
+            channel="test.channel",
+            file_path=csv_file,
+            poll_interval=0.1,
+        )
+
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.2)
+
+        await source.stop()
+        await asyncio.sleep(0.1)
+
+        assert not source.is_running
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
         await broker.stop()
 
