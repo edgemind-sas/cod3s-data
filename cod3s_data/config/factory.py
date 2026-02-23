@@ -23,6 +23,8 @@ from cod3s_data.transformations.builtin import (
     AlarmTransform,
     FilterTransform,
     MapTransform,
+    ThrottleTransform,
+    UnpackTransform,
 )
 
 
@@ -44,6 +46,8 @@ class ComponentFactory:
             "map": self._create_map_transform,
             "aggregate": self._create_aggregate_transform,
             "alarm": self._create_alarm_transform,
+            "throttle": self._create_throttle_transform,
+            "unpack": UnpackTransform,
         }
         self._destination_registry: dict[str, Callable[..., Destination]] = {
             "console": ConsoleDestination,
@@ -208,6 +212,16 @@ class ComponentFactory:
             kwargs["aggregation_fn"] = aggregation_fn
 
         return AggregateTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_throttle_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> ThrottleTransform:
+        """Create ThrottleTransform from config."""
+        return ThrottleTransform(broker, input_channels, output_channel, **kwargs)
 
     def _create_alarm_transform(
         self,

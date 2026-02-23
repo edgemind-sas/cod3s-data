@@ -6,7 +6,7 @@ from typing import Any
 
 from cod3s_data.broker.base import Broker
 from cod3s_data.core.message import Message
-from cod3s_data.transformations.base import StatefulTransform, StatelessTransform
+from cod3s_data.transformations.base import StatefulTransform, StatelessTransform, Transformation
 
 
 class FilterTransform(StatelessTransform):
@@ -53,7 +53,10 @@ class AggregateTransform(StatefulTransform):
         window_type: str = "count",
         window_size: int | None = None,
         window_duration: float | None = None,
-        aggregation_fn: Callable[[list[Message]], Any] = lambda msgs: sum(m.value for m in msgs) / len(msgs),  # noqa: E501
+        # fmt: off
+        aggregation_fn: Callable[[list[Message]], Any] = lambda msgs: sum(m.value for m in msgs)
+        / len(msgs),  # noqa: E501
+        # fmt: on
     ) -> None:
         super().__init__(broker, input_channels, output_channel)
         self.window_type = window_type
@@ -182,16 +185,50 @@ class AlarmTransform(StatefulTransform):
         return None
 
 
-class UnpackTransform(StatelessTransform):
+class ThrottleTransform(StatefulTransform):
+    """Throttle messages to at most one per interval.
+
+    Forwards the first message immediately, then suppresses subsequent
+    messages until ``interval`` seconds have elapsed since the last emit.
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        interval: float = 1.0,
+    ) -> None:
+        super().__init__(broker, input_channels, output_channel)
+        self.interval = interval
+
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        """Forward message only if interval has elapsed since last emit."""
+        import time
+
+        now = time.monotonic()
+        last_emit = state.get("last_emit", 0.0)
+
+        if now - last_emit >= self.interval:
+            state["last_emit"] = now
+            return message
+        return None
+
+
+class UnpackTransform(Transformation):
     """Unpack a dict-valued message into one message per key.
 
-    Each entry in the dict becomes a separate message with:
+    Each entry in the dict becomes a separate message published on a
+    dedicated sub-channel ``{output_channel}.{key}``:
+
     - key: the dict key name
     - value: the corresponding scalar value
     - timestamp: inherited from the original message
     - tags: inherited from the original message
 
-    Non-dict values pass through unchanged.
+    Non-dict values pass through unchanged on ``output_channel``.
     """
 
     def __init__(
@@ -200,19 +237,74 @@ class UnpackTransform(StatelessTransform):
         input_channels: str | list[str],
         output_channel: str,
     ) -> None:
-        def unpack_fn(msg: Message) -> Message | list[Message] | None:
-            if not isinstance(msg.value, dict):
-                return msg
-            if not msg.value:
-                return None
-            return [
-                Message(
-                    key=k,
-                    timestamp=msg.timestamp,
-                    value=v,
-                    tags=msg.tags,
-                )
-                for k, v in msg.value.items()
-            ]
+        super().__init__(broker, input_channels, output_channel)
 
-        super().__init__(broker, input_channels, output_channel, unpack_fn)
+    async def transform(self, message: Message) -> Message | list[Message] | None:
+        """Fallback for non-dict values (called by base ``_process_message``)."""
+        if not isinstance(message.value, dict):
+            return message
+        # Dict case is handled entirely by _process_message override
+        return None
+
+    async def _process_message(self, message: Message) -> None:
+        """Route each dict entry to ``{output_channel}.{key}``."""
+        try:
+            # Observatory: RECEIVED
+            if self._bridge is not None:
+                try:  # noqa: SIM105
+                    await self._bridge.on_message_received(
+                        self._component_id, "transformation", message
+                    )
+                except Exception:
+                    pass
+
+            if not isinstance(message.value, dict):
+                # Non-dict: delegate to base (publishes on output_channel)
+                results = await self.transform(message)
+                if results and self._bridge is not None:
+                    try:  # noqa: SIM105
+                        out_list = results if isinstance(results, list) else [results]
+                        await self._bridge.on_message_processed(
+                            self._component_id,
+                            "transformation",
+                            message,
+                            out_list,
+                            self.output_channel,
+                        )
+                    except Exception:
+                        pass
+                if results:
+                    for result in results if isinstance(results, list) else [results]:
+                        await self.broker.publish(self.output_channel, result)
+                return
+
+            if not message.value:
+                return
+
+            # Dict: publish each entry on {output_channel}.{key}
+            out_messages: list[Message] = []
+            for k, v in message.value.items():
+                out_msg = Message(
+                    key=k,
+                    timestamp=message.timestamp,
+                    value=v,
+                    tags=message.tags,
+                )
+                out_messages.append(out_msg)
+                await self.broker.publish(f"{self.output_channel}.{k}", out_msg)
+
+            # Observatory: PROCESSED
+            if out_messages and self._bridge is not None:
+                try:  # noqa: SIM105
+                    await self._bridge.on_message_processed(
+                        self._component_id,
+                        "transformation",
+                        message,
+                        out_messages,
+                        self.output_channel,
+                    )
+                except Exception:
+                    pass
+
+        except Exception:
+            pass

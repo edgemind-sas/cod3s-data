@@ -15,6 +15,7 @@ from cod3s_data.transformations import (
     MapTransform,
     StatefulTransform,
     StatelessTransform,
+    ThrottleTransform,
     UnpackTransform,
 )
 
@@ -548,13 +549,84 @@ class TestAlarmTransform:
         await broker.stop()
 
 
+class TestThrottleTransform:
+    @pytest.mark.asyncio
+    async def test_first_message_passes(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel")
+        await dest.start()
+
+        transform = ThrottleTransform(broker, "input.channel", "output.channel", interval=1.0)
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(value=1.0))
+        await asyncio.sleep(0.05)
+
+        messages = dest.get_all()
+        assert len(messages) == 1
+        assert messages[0].value == 1.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_suppresses_within_interval(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel")
+        await dest.start()
+
+        transform = ThrottleTransform(broker, "input.channel", "output.channel", interval=1.0)
+        await transform.start()
+
+        for i in range(5):
+            await broker.publish("input.channel", create_message(value=float(i)))
+        await asyncio.sleep(0.05)
+
+        messages = dest.get_all()
+        assert len(messages) == 1  # Only first passes
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_passes_after_interval(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel")
+        await dest.start()
+
+        transform = ThrottleTransform(broker, "input.channel", "output.channel", interval=0.15)
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(value=1.0))
+        await asyncio.sleep(0.2)  # Wait for interval to elapse
+        await broker.publish("input.channel", create_message(value=2.0))
+        await asyncio.sleep(0.05)
+
+        messages = dest.get_all()
+        assert len(messages) == 2
+        assert messages[0].value == 1.0
+        assert messages[1].value == 2.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+
 class TestUnpackTransform:
     @pytest.mark.asyncio
     async def test_unpack_dict_value(self):
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        dest = CollectDestination(broker, "output.channel")
+        dest = CollectDestination(broker, "output.channel.**")
         await dest.start()
 
         transform = UnpackTransform(broker, "input.channel", "output.channel")
@@ -585,7 +657,7 @@ class TestUnpackTransform:
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        dest = CollectDestination(broker, "output.channel")
+        dest = CollectDestination(broker, "output.channel.**")
         await dest.start()
 
         transform = UnpackTransform(broker, "input.channel", "output.channel")
@@ -642,7 +714,7 @@ class TestUnpackTransform:
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        dest = CollectDestination(broker, "output.channel")
+        dest = CollectDestination(broker, "output.channel.**")
         await dest.start()
 
         transform = UnpackTransform(broker, "input.channel", "output.channel")
@@ -671,7 +743,7 @@ class TestUnpackTransform:
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        dest = CollectDestination(broker, "output.channel")
+        dest = CollectDestination(broker, "output.channel.**")
         await dest.start()
 
         transform = UnpackTransform(broker, "input.channel", "output.channel")
@@ -692,6 +764,77 @@ class TestUnpackTransform:
         assert len(messages) == 1
         assert messages[0].key == "x"
         assert messages[0].value == 1
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_unpack_per_key_channels(self):
+        """Each dict key is published on its own sub-channel."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest_a = CollectDestination(broker, "output.channel.a")
+        dest_b = CollectDestination(broker, "output.channel.b")
+        await dest_a.start()
+        await dest_b.start()
+
+        transform = UnpackTransform(broker, "input.channel", "output.channel")
+        await transform.start()
+
+        await broker.publish(
+            "input.channel",
+            Message(
+                key="sensor",
+                timestamp=datetime.now(UTC),
+                value={"a": 1, "b": 2},
+                tags={},
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+        msgs_a = dest_a.get_all()
+        msgs_b = dest_b.get_all()
+        assert len(msgs_a) == 1
+        assert msgs_a[0].key == "a"
+        assert msgs_a[0].value == 1
+        assert len(msgs_b) == 1
+        assert msgs_b[0].key == "b"
+        assert msgs_b[0].value == 2
+
+        await transform.stop()
+        await dest_a.stop()
+        await dest_b.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_unpack_channel_name_with_key(self):
+        """Verify the exact channel name: {output_channel}.{key}."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel.temperature_top")
+        await dest.start()
+
+        transform = UnpackTransform(broker, "input.channel", "output.channel")
+        await transform.start()
+
+        await broker.publish(
+            "input.channel",
+            Message(
+                key="sensor",
+                timestamp=datetime.now(UTC),
+                value={"temperature_top": 25.5},
+                tags={},
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+        messages = dest.get_all()
+        assert len(messages) == 1
+        assert messages[0].key == "temperature_top"
+        assert messages[0].value == 25.5
 
         await transform.stop()
         await dest.stop()

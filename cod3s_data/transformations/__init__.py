@@ -10,6 +10,7 @@ from cod3s_data.transformations.builtin import (
     AlarmTransform,
     FilterTransform,
     MapTransform,
+    ThrottleTransform,
     UnpackTransform,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "MapTransform",
     "AggregateTransform",
     "AlarmTransform",
+    "ThrottleTransform",
     "UnpackTransform",
 ]
