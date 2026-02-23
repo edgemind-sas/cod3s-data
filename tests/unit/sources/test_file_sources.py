@@ -365,7 +365,7 @@ class TestCSVSource:
 
     @pytest.mark.asyncio
     async def test_csv_source_exclude_columns(self):
-        """Test CSVSource with exclude_columns."""
+        """Test that exclude_columns removes columns from the value dict."""
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
@@ -382,15 +382,21 @@ class TestCSVSource:
             broker=broker,
             channel="test.channel",
             file_path=fixture_path,
-            tag_columns=["sensor", "location"],
+            tag_columns=["sensor"],
             exclude_columns=["location"],
+            pack_remaining_as_value=True,
         )
 
         await source.start()
         await asyncio.sleep(0.05)
 
-        # location should be excluded from tags
-        assert "location" not in received[0].tags
+        # location should be excluded from the value dict
+        assert "location" not in received[0].value
+        # sensor (tag column) should also not be in the value dict
+        assert "sensor" not in received[0].value
+        # value should still contain the 'value' column from CSV
+        assert "value" in received[0].value
+        # tags should still work
         assert "sensor" in received[0].tags
 
         await broker.stop()
@@ -600,6 +606,222 @@ class TestCSVSource:
         assert len(received) == 2
         # Should be fast (~0.01s), not 10s
         assert elapsed < 1.0
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+
+class TestCSVSourceNewFeatures:
+    """Tests for default_key, default_tags, timestamp_mode, pack_remaining_as_value."""
+
+    @pytest.mark.asyncio
+    async def test_default_key(self):
+        """Test that default_key overrides key_column."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=fixture_path,
+            default_key="fixed_key",
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 4
+        assert all(m.key == "fixed_key" for m in received)
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_default_tags(self):
+        """Test that default_tags are merged with tag_columns."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "test_data.csv"
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=fixture_path,
+            tag_columns=["sensor"],
+            default_tags={"source": "test", "env": "ci"},
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 4
+        # default_tags are present
+        assert received[0].tags["source"] == "test"
+        assert received[0].tags["env"] == "ci"
+        # tag_columns value also present
+        assert received[0].tags["sensor"] == "TH001"
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_timestamp_epoch_mode(self):
+        """Test timestamp_mode='epoch' reads epoch seconds."""
+        import tempfile
+
+        csv_content = "key,ts,value\na,1700000000,42\nb,1700000060,43\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            timestamp_column="ts",
+            timestamp_mode="epoch",
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 2
+        from datetime import UTC, datetime
+
+        expected = datetime.fromtimestamp(1700000000, tz=UTC)
+        assert received[0].timestamp == expected
+        assert received[1].timestamp == datetime.fromtimestamp(1700000060, tz=UTC)
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_timestamp_epoch_with_microseconds(self):
+        """Test epoch mode with a separate microseconds column."""
+        import tempfile
+
+        csv_content = "key,sec,usec,value\na,1700000000,500000,42\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            timestamp_column="sec",
+            timestamp_microseconds_column="usec",
+            timestamp_mode="epoch",
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        from datetime import UTC, datetime
+
+        expected = datetime.fromtimestamp(1700000000.5, tz=UTC)
+        assert received[0].timestamp == expected
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_pack_remaining_as_value(self):
+        """Test pack_remaining_as_value packs all non-metadata columns."""
+        import tempfile
+
+        csv_content = "key,timestamp,sensor,temp,pressure\na,2024-01-15T10:00:00Z,S1,25.5,1013\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            tag_columns=["sensor"],
+            pack_remaining_as_value=True,
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        value = received[0].value
+        assert isinstance(value, dict)
+        # temp and pressure should be in the value
+        assert "temp" in value
+        assert "pressure" in value
+        # key, timestamp, and sensor (tag) should NOT be in the value
+        assert "key" not in value
+        assert "timestamp" not in value
+        assert "sensor" not in value
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_pack_remaining_excludes_metadata_columns(self):
+        """Test that pack_remaining excludes key, timestamp, usec, tags, and exclude_columns."""
+        import tempfile
+
+        csv_content = "sec,usec,tag1,col_a,col_b,junk\n1700000000,500000,x,10,20,99\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            default_key="reading",
+            timestamp_column="sec",
+            timestamp_microseconds_column="usec",
+            timestamp_mode="epoch",
+            tag_columns=["tag1"],
+            exclude_columns=["junk"],
+            pack_remaining_as_value=True,
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        value = received[0].value
+        assert isinstance(value, dict)
+        # Only col_a and col_b should remain
+        assert set(value.keys()) == {"col_a", "col_b"}
+        # Verify metadata is correctly extracted
+        assert received[0].key == "reading"
+        assert received[0].tags["tag1"] == "x"
 
         Path(tmp_path).unlink()
         await broker.stop()

@@ -97,6 +97,9 @@ class CSVSource(Source):
     - Multi-value columns (value_columns → dict value)
     - Column exclusion (exclude_columns)
     - Temporal replay with speed_factor
+    - Fixed key (default_key) and fixed tags (default_tags)
+    - Epoch timestamp mode (timestamp_mode="epoch")
+    - Pack all remaining columns as dict value (pack_remaining_as_value)
     """
 
     def __init__(
@@ -122,6 +125,14 @@ class CSVSource(Source):
         # --- Replay ---
         replay: bool = False,
         speed_factor: float = 1.0,
+        # --- Fixed key & tags ---
+        default_key: str | None = None,
+        default_tags: dict[str, str] | None = None,
+        # --- Timestamp mode ---
+        timestamp_mode: str = "iso",
+        timestamp_microseconds_column: str | None = None,
+        # --- Pack remaining columns ---
+        pack_remaining_as_value: bool = False,
     ) -> None:
         """
         Initialize CSV source.
@@ -130,9 +141,9 @@ class CSVSource(Source):
             broker: Message broker
             channel: Target channel
             file_path: Path to CSV file
-            key_column: Column name for message key
+            key_column: Column name for message key (ignored if default_key is set)
             timestamp_column: Column name for timestamp
-            value_column: Column name for value (ignored if value_columns is set)
+            value_column: Column name for value (ignored if value_columns or pack_remaining_as_value is set)
             tag_columns: Column names to include as tags
             delivery_guarantee: Delivery guarantee
             delimiter: CSV separator (e.g. ";" for EGM files)
@@ -141,9 +152,15 @@ class CSVSource(Source):
             has_header: False if file has no header row (columns named column_0, column_1...)
             max_rows: Maximum number of data rows to read
             value_columns: Multiple columns to pack as dict value (takes priority over value_column)
-            exclude_columns: Columns to exclude from value, tags, key, and timestamp
+            exclude_columns: Columns to exclude from the value dict
             replay: Enable temporal replay (sleep between messages based on timestamps)
             speed_factor: Replay speed multiplier (10.0 = 10x faster)
+            default_key: Fixed message key (overrides key_column when set)
+            default_tags: Fixed tags merged with tags from tag_columns
+            timestamp_mode: "iso" for ISO 8601 parsing (default), "epoch" for Unix epoch seconds
+            timestamp_microseconds_column: Column with microseconds to add to epoch timestamp
+            pack_remaining_as_value: When True, all columns not used for key/timestamp/tags/exclude
+                become the value dict
         """
         batch_mode = BatchMode.TRANSPOSE if replay else BatchMode.BATCH
         super().__init__(broker, channel, batch_mode, delivery_guarantee)
@@ -161,6 +178,11 @@ class CSVSource(Source):
         self.exclude_columns = set(exclude_columns) if exclude_columns else set()
         self.replay = replay
         self.speed_factor = speed_factor
+        self.default_key = default_key
+        self.default_tags = default_tags or {}
+        self.timestamp_mode = timestamp_mode
+        self.timestamp_microseconds_column = timestamp_microseconds_column
+        self.pack_remaining_as_value = pack_remaining_as_value
 
     def _read_csv_rows(self) -> list[dict[str, Any]]:
         """Read CSV file and return list of row dicts.
@@ -237,38 +259,76 @@ class CSVSource(Source):
             prev_ts = message.timestamp
             yield message
 
-    def _parse_row(self, row: dict[str, Any]) -> Message:
-        """Parse message from CSV row, respecting exclude_columns and value_columns."""
-        # Filter out excluded columns
-        if self.exclude_columns:
-            row = {k: v for k, v in row.items() if k not in self.exclude_columns}
+    def _parse_timestamp(self, row: dict[str, Any]) -> datetime:
+        """Parse timestamp from a CSV row according to ``timestamp_mode``.
 
-        # Extract key
-        key = str(row.get(self.key_column, "unknown"))
+        Args:
+            row: Full CSV row dict (before column filtering).
 
-        # Parse timestamp
+        Returns:
+            Timezone-aware UTC datetime.
+        """
+        if self.timestamp_mode == "epoch":
+            raw_sec = row.get(self.timestamp_column)
+            if raw_sec is not None:
+                epoch = float(raw_sec)
+                if self.timestamp_microseconds_column:
+                    raw_usec = row.get(self.timestamp_microseconds_column)
+                    if raw_usec is not None:
+                        epoch += float(raw_usec) / 1_000_000
+                return datetime.fromtimestamp(epoch, tz=UTC)
+            return datetime.now(UTC)
+
+        # Default: ISO 8601 parsing
         timestamp_str = row.get(self.timestamp_column)
         if timestamp_str:
             try:
                 timestamp = datetime.fromisoformat(str(timestamp_str))
             except (ValueError, TypeError):
-                timestamp = datetime.now(UTC)
-
+                return datetime.now(UTC)
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=UTC)
-        else:
-            timestamp = datetime.now(UTC)
+            return timestamp
+        return datetime.now(UTC)
 
-        # Extract value: multi-column dict or single column
-        if self.value_columns:
-            value: Any = {col: row[col] for col in self.value_columns if col in row}
-        else:
-            value = row.get(self.value_column)
+    def _parse_row(self, row: dict[str, Any]) -> Message:
+        """Parse message from CSV row.
 
-        # Extract tags (exclude columns already used for key/timestamp/value)
+        Extraction order:
+        1. Key and timestamp are read from the **full** row.
+        2. ``exclude_columns`` and metadata columns are removed to build the value.
+        """
+        # --- Key ---
+        key = (
+            self.default_key
+            if self.default_key is not None
+            else str(row.get(self.key_column, "unknown"))
+        )
+
+        # --- Timestamp (from full row, before filtering) ---
+        timestamp = self._parse_timestamp(row)
+
+        # --- Tags ---
         tags = {
             col: str(row[col]) for col in self.tag_columns if col in row and row[col] is not None
         }
+        if self.default_tags:
+            tags = {**tags, **self.default_tags}
+
+        # --- Value ---
+        if self.pack_remaining_as_value:
+            # Columns used for metadata (not part of the value dict)
+            used_columns = set(self.tag_columns) | self.exclude_columns
+            if self.default_key is None:
+                used_columns.add(self.key_column)
+            used_columns.add(self.timestamp_column)
+            if self.timestamp_microseconds_column:
+                used_columns.add(self.timestamp_microseconds_column)
+            value: Any = {col: row[col] for col in row if col not in used_columns}
+        elif self.value_columns:
+            value = {col: row[col] for col in self.value_columns if col in row}
+        else:
+            value = row.get(self.value_column)
 
         return Message(key=key, timestamp=timestamp, value=value, tags=tags)
 
