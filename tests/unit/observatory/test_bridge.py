@@ -1,7 +1,6 @@
 """Tests for Observatory Bridge."""
 
-from datetime import datetime, timezone
-from uuid import uuid4
+from datetime import UTC, datetime
 
 import pytest
 
@@ -34,7 +33,7 @@ def _make_message(**kwargs) -> Message:
     """Create a test Message."""
     defaults = {
         "key": "temperature",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "value": 42.5,
         "tags": {"sensor": "TH001"},
     }
@@ -136,7 +135,14 @@ class _FakeSource:
 
 
 class _FakeTransformation:
-    def __init__(self, component_id: str, input_channels: list[str], output_channel: str, running: bool = False, label: str = ""):
+    def __init__(
+        self,
+        component_id: str,
+        input_channels: list[str],
+        output_channel: str,
+        running: bool = False,
+        label: str = "",
+    ):
         self._component_id = component_id
         self.input_channels = input_channels
         self.output_channel = output_channel
@@ -145,7 +151,9 @@ class _FakeTransformation:
 
 
 class _FakeDestination:
-    def __init__(self, component_id: str, channel_pattern: str, running: bool = False, label: str = ""):
+    def __init__(
+        self, component_id: str, channel_pattern: str, running: bool = False, label: str = ""
+    ):
         self._component_id = component_id
         self.channel_pattern = channel_pattern
         self._running = running
@@ -225,6 +233,35 @@ class TestTopologySnapshot:
         result = bridge.get_topology_snapshot()
         edges = result["edges"]
         assert len(edges) == 0
+
+    def test_edges_parent_child_channel(self):
+        """UnpackTransform output_channel links to subscribers on sub-channels."""
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "raw.egm")],
+            transformations=[
+                _FakeTransformation("tfm-unpack", ["raw.egm"], "sensors.egm"),
+                _FakeTransformation(
+                    "tfm-viscosity", ["sensors.egm.pressure"], "indicators.viscosity"
+                ),
+                _FakeTransformation(
+                    "tfm-bead", ["sensors.egm.extruder_speed"], "indicators.bead_width"
+                ),
+            ],
+            destinations=[_FakeDestination("dst-0", "sensors.**")],
+        )
+        result = bridge.get_topology_snapshot()
+        edges = result["edges"]
+
+        # src-0 → tfm-unpack (raw.egm exact match)
+        # tfm-unpack → tfm-viscosity (sensors.egm is parent of sensors.egm.pressure)
+        # tfm-unpack → tfm-bead (sensors.egm is parent of sensors.egm.extruder_speed)
+        # tfm-unpack → dst-0 (sensors.egm matches sensors.**)
+        edge_pairs = [(e["source_id"], e["target_id"]) for e in edges]
+        assert ("src-0", "tfm-unpack") in edge_pairs
+        assert ("tfm-unpack", "tfm-viscosity") in edge_pairs
+        assert ("tfm-unpack", "tfm-bead") in edge_pairs
+        assert ("tfm-unpack", "dst-0") in edge_pairs
 
     def test_no_match_no_edge(self):
         bridge = _make_bridge()
@@ -430,7 +467,9 @@ class TestMessageInspectorHooks:
         bridge = _make_bridge(message_store=ms, journey_store=js)
         bridge._framework = _FakeFramework(
             sources=[_FakeSource("src-0", "sensors.raw", label="Temp Sensor")],
-            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "alerts.high", label="Alert Filter")],
+            transformations=[
+                _FakeTransformation("tfm-0", ["sensors.**"], "alerts.high", label="Alert Filter")
+            ],
             destinations=[_FakeDestination("dst-0", "alerts.**", label="Alert Logger")],
         )
 
@@ -486,16 +525,12 @@ class TestMessageInspectorHooks:
         # tfm-0 produces msg-B
         msg_b = _make_message(key="alerts")
         msg_b_id = str(msg_b.id)
-        await bridge.on_message_processed(
-            "tfm-0", "transformation", msg_a, [msg_b], "alerts.high"
-        )
+        await bridge.on_message_processed("tfm-0", "transformation", msg_a, [msg_b], "alerts.high")
 
         # tfm-1 produces msg-C
         msg_c = _make_message(key="logs")
         msg_c_id = str(msg_c.id)
-        await bridge.on_message_processed(
-            "tfm-1", "transformation", msg_a, [msg_c], "logs.raw"
-        )
+        await bridge.on_message_processed("tfm-1", "transformation", msg_a, [msg_c], "logs.raw")
 
         # msg-B and msg-C are published
         await bridge.on_message_published("alerts.high", msg_b, 1)
@@ -529,10 +564,10 @@ class TestMessageInspectorHooks:
 
         # Verify we have the full set of stages
         stages = [s["stage"] for s in journey]
-        assert stages.count("PUBLISHED") == 3   # msg-A, msg-B, msg-C
-        assert stages.count("RECEIVED") == 2    # tfm-0, tfm-1
-        assert stages.count("PROCESSED") == 2   # tfm-0, tfm-1
-        assert stages.count("DELIVERED") == 2   # dst-0, dst-1
+        assert stages.count("PUBLISHED") == 3  # msg-A, msg-B, msg-C
+        assert stages.count("RECEIVED") == 2  # tfm-0, tfm-1
+        assert stages.count("PROCESSED") == 2  # tfm-0, tfm-1
+        assert stages.count("DELIVERED") == 2  # dst-0, dst-1
 
     @pytest.mark.asyncio
     async def test_receive_channel_resolved_via_topology(self):
@@ -547,10 +582,22 @@ class TestMessageInspectorHooks:
         js = JourneyStore()
         bridge = _make_bridge(message_store=ms, journey_store=js)
         bridge._framework = _FakeFramework(
-            sources=[_FakeSource("src-0", "sensors.temperature.room1", label="Capteur Température")],
+            sources=[
+                _FakeSource("src-0", "sensors.temperature.room1", label="Capteur Température")
+            ],
             transformations=[
-                _FakeTransformation("tfm-0", ["sensors.temperature.**"], "alerts.high_temp", label="Alerte haute temp"),
-                _FakeTransformation("tfm-1", ["sensors.temperature.**"], "stats.temperature.avg", label="Moyenne Température"),
+                _FakeTransformation(
+                    "tfm-0",
+                    ["sensors.temperature.**"],
+                    "alerts.high_temp",
+                    label="Alerte haute temp",
+                ),
+                _FakeTransformation(
+                    "tfm-1",
+                    ["sensors.temperature.**"],
+                    "stats.temperature.avg",
+                    label="Moyenne Température",
+                ),
             ],
             destinations=[
                 _FakeDestination("dst-0", "sensors.**", label="Log Capteurs"),

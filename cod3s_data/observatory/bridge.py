@@ -215,15 +215,18 @@ class ObservatoryBridge:
                 try:
                     pub_id, pub_type, pub_label = self._resolve_publisher(channel)
                     parent_id = self._get_parent_id(msg_id)
-                    self._journey_store.add_step(trace_id, JourneyStep(
-                        stage="PUBLISHED",
-                        component_id=pub_id,
-                        component_type=pub_type,
-                        channel=channel,
-                        message_id=msg_id,
-                        parent_message_id=parent_id,
-                        label=pub_label,
-                    ))
+                    self._journey_store.add_step(
+                        trace_id,
+                        JourneyStep(
+                            stage="PUBLISHED",
+                            component_id=pub_id,
+                            component_type=pub_type,
+                            channel=channel,
+                            message_id=msg_id,
+                            parent_message_id=parent_id,
+                            label=pub_label,
+                        ),
+                    )
                 except Exception:
                     pass
 
@@ -245,15 +248,18 @@ class ObservatoryBridge:
             stage = "DELIVERED" if component_type == "destination" else "RECEIVED"
             label = self._resolve_label(component_id)
             channel = self._find_receive_channel(component_id, trace_id)
-            self._journey_store.add_step(trace_id, JourneyStep(
-                stage=stage,
-                component_id=component_id,
-                component_type=component_type,
-                channel=channel,
-                message_id=msg_id,
-                parent_message_id=self._get_parent_id(msg_id),
-                label=label,
-            ))
+            self._journey_store.add_step(
+                trace_id,
+                JourneyStep(
+                    stage=stage,
+                    component_id=component_id,
+                    component_type=component_type,
+                    channel=channel,
+                    message_id=msg_id,
+                    parent_message_id=self._get_parent_id(msg_id),
+                    label=label,
+                ),
+            )
         except Exception as e:
             logger.debug("Observatory hook error", hook="on_message_received", error=str(e))
 
@@ -272,15 +278,18 @@ class ObservatoryBridge:
 
             if self._journey_store is not None:
                 label = self._resolve_label(component_id)
-                self._journey_store.add_step(trace_id, JourneyStep(
-                    stage="PROCESSED",
-                    component_id=component_id,
-                    component_type=component_type,
-                    channel=output_channel,
-                    message_id=input_id,
-                    parent_message_id=self._get_parent_id(input_id),
-                    label=label,
-                ))
+                self._journey_store.add_step(
+                    trace_id,
+                    JourneyStep(
+                        stage="PROCESSED",
+                        component_id=component_id,
+                        component_type=component_type,
+                        channel=output_channel,
+                        message_id=input_id,
+                        parent_message_id=self._get_parent_id(input_id),
+                        label=label,
+                    ),
+                )
 
             # Link output messages to the same trace_id + parent relationship
             for out_msg in output_messages:
@@ -446,28 +455,34 @@ class ObservatoryBridge:
         components: list[dict[str, str]] = []
         for source in self._framework.sources:
             state = "running" if source._running else "created"
-            components.append({
-                "component_id": source._component_id,
-                "component_type": "source",
-                "state": state,
-                "label": source._label,
-            })
+            components.append(
+                {
+                    "component_id": source._component_id,
+                    "component_type": "source",
+                    "state": state,
+                    "label": source._label,
+                }
+            )
         for tfm in self._framework.transformations:
             state = "running" if tfm._running else "created"
-            components.append({
-                "component_id": tfm._component_id,
-                "component_type": "transformation",
-                "state": state,
-                "label": tfm._label,
-            })
+            components.append(
+                {
+                    "component_id": tfm._component_id,
+                    "component_type": "transformation",
+                    "state": state,
+                    "label": tfm._label,
+                }
+            )
         for dest in self._framework.destinations:
             state = "running" if dest._running else "created"
-            components.append({
-                "component_id": dest._component_id,
-                "component_type": "destination",
-                "state": state,
-                "label": dest._label,
-            })
+            components.append(
+                {
+                    "component_id": dest._component_id,
+                    "component_type": "destination",
+                    "state": state,
+                    "label": dest._label,
+                }
+            )
         return components
 
     def get_topology_snapshot(self) -> dict[str, Any]:
@@ -481,46 +496,52 @@ class ObservatoryBridge:
 
         for source in self._framework.sources:
             state = "running" if source._running else "created"
-            nodes.append({
-                "component_id": source._component_id,
-                "component_type": "source",
-                "state": state,
-                "label": source._label,
-                "channels": {
-                    "publishes": [source.channel],
-                    "subscribes": [],
-                },
-            })
+            nodes.append(
+                {
+                    "component_id": source._component_id,
+                    "component_type": "source",
+                    "state": state,
+                    "label": source._label,
+                    "channels": {
+                        "publishes": [source.channel],
+                        "subscribes": [],
+                    },
+                }
+            )
             publishers.append((source._component_id, source.channel))
 
         for tfm in self._framework.transformations:
             state = "running" if tfm._running else "created"
-            nodes.append({
-                "component_id": tfm._component_id,
-                "component_type": "transformation",
-                "state": state,
-                "label": tfm._label,
-                "channels": {
-                    "publishes": [tfm.output_channel],
-                    "subscribes": list(tfm.input_channels),
-                },
-            })
+            nodes.append(
+                {
+                    "component_id": tfm._component_id,
+                    "component_type": "transformation",
+                    "state": state,
+                    "label": tfm._label,
+                    "channels": {
+                        "publishes": [tfm.output_channel],
+                        "subscribes": list(tfm.input_channels),
+                    },
+                }
+            )
             publishers.append((tfm._component_id, tfm.output_channel))
             for ch in tfm.input_channels:
                 subscribers.append((tfm._component_id, ch))
 
         for dest in self._framework.destinations:
             state = "running" if dest._running else "created"
-            nodes.append({
-                "component_id": dest._component_id,
-                "component_type": "destination",
-                "state": state,
-                "label": dest._label,
-                "channels": {
-                    "publishes": [],
-                    "subscribes": [dest.channel_pattern],
-                },
-            })
+            nodes.append(
+                {
+                    "component_id": dest._component_id,
+                    "component_type": "destination",
+                    "state": state,
+                    "label": dest._label,
+                    "channels": {
+                        "publishes": [],
+                        "subscribes": [dest.channel_pattern],
+                    },
+                }
+            )
             subscribers.append((dest._component_id, dest.channel_pattern))
 
         # Compute edges
@@ -529,12 +550,14 @@ class ObservatoryBridge:
             for sub_id, pattern in subscribers:
                 if pub_id == sub_id:
                     continue
-                if SubscriptionRegistry.matches(pattern, channel):
-                    edges.append({
-                        "source_id": pub_id,
-                        "target_id": sub_id,
-                        "channel": channel,
-                        "pattern": pattern,
-                    })
+                if SubscriptionRegistry.matches(pattern, channel) or pattern.startswith(channel + "."):
+                    edges.append(
+                        {
+                            "source_id": pub_id,
+                            "target_id": sub_id,
+                            "channel": channel,
+                            "pattern": pattern,
+                        }
+                    )
 
         return {"nodes": nodes, "edges": edges}
