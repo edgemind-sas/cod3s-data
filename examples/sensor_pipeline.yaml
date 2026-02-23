@@ -29,13 +29,13 @@ sources:
       max_value: 1030.0    # Max pressure (hPa)
 
 transformations:
-  # Alert on high temperature
-  - type: filter
-    label: "Alerte haute temp"
+  # Alarm on high temperature (fires only on state transitions)
+  - type: alarm
+    label: "Alarme haute temp"
     input_channels: sensors.temperature.**
     output_channel: alerts.high_temp
     params:
-      predicate_code: "lambda msg: msg.value > 28.0"
+      max_value: 28.0
 
   # Calculate average temperature
   - type: aggregate
