@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from cod3s_data.observatory.routes import channels, debug, health, topology, ws
@@ -51,6 +52,22 @@ def create_app(
 
     # Mount WebSocket
     app.include_router(ws.router)
+
+    # Cache-busting: hashed assets are immutable, but index.html must never be cached
+    # so the browser always loads the latest JS/CSS references after a deploy.
+    @app.middleware("http")
+    async def _cache_control(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif request.url.path in ("/", "/index.html") or response.headers.get(
+            "content-type", ""
+        ).startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
 
     # Mount static frontend (must be last - catches all remaining routes)
     static_dir = Path(__file__).parent / "static"
