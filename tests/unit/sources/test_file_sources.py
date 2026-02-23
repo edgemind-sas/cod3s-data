@@ -827,6 +827,123 @@ class TestCSVSourceNewFeatures:
         await broker.stop()
 
 
+class TestCSVSourceColumnMapping:
+    """Tests for CSVSource column_mapping feature."""
+
+    @pytest.mark.asyncio
+    async def test_column_mapping(self):
+        """Test that column_mapping renames dict value keys."""
+        import tempfile
+
+        csv_content = "key,timestamp,temp,pression\na,2024-01-15T10:00:00Z,25.5,1013\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            value_columns=["temp", "pression"],
+            column_mapping={"temp": "temperature", "pression": "pressure"},
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        value = received[0].value
+        assert isinstance(value, dict)
+        assert "temperature" in value
+        assert "pressure" in value
+        assert "temp" not in value
+        assert "pression" not in value
+        assert value["temperature"] == 25.5
+        assert value["pressure"] == 1013
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_column_mapping_partial(self):
+        """Test that unmapped keys keep their original name."""
+        import tempfile
+
+        csv_content = "key,timestamp,temp,humidity\na,2024-01-15T10:00:00Z,25.5,65\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            value_columns=["temp", "humidity"],
+            column_mapping={"temp": "temperature"},  # humidity not mapped
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        value = received[0].value
+        assert isinstance(value, dict)
+        assert "temperature" in value
+        assert "humidity" in value  # unchanged
+        assert "temp" not in value
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_column_mapping_none_noop(self):
+        """Test that no mapping (None) leaves values unchanged."""
+        import tempfile
+
+        csv_content = "key,timestamp,temp,pressure\na,2024-01-15T10:00:00Z,25.5,1013\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write(csv_content)
+            tmp_path = f.name
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        received: list[Message] = []
+        broker.subscribe("ch", lambda msg: received.append(msg))
+
+        source = CSVSource(
+            broker=broker,
+            channel="ch",
+            file_path=tmp_path,
+            value_columns=["temp", "pressure"],
+            column_mapping=None,
+        )
+
+        await source.start()
+        await asyncio.sleep(0.05)
+
+        assert len(received) == 1
+        value = received[0].value
+        assert isinstance(value, dict)
+        assert "temp" in value
+        assert "pressure" in value
+
+        Path(tmp_path).unlink()
+        await broker.stop()
+
+
 class TestCSVWatchSource:
     """Test CSVWatchSource."""
 

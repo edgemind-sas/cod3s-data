@@ -133,6 +133,8 @@ class CSVSource(Source):
         timestamp_microseconds_column: str | None = None,
         # --- Pack remaining columns ---
         pack_remaining_as_value: bool = False,
+        # --- Column renaming ---
+        column_mapping: dict[str, str] | None = None,
     ) -> None:
         """
         Initialize CSV source.
@@ -161,6 +163,8 @@ class CSVSource(Source):
             timestamp_microseconds_column: Column with microseconds to add to epoch timestamp
             pack_remaining_as_value: When True, all columns not used for key/timestamp/tags/exclude
                 become the value dict
+            column_mapping: Optional dict mapping original column names to new names.
+                Applied to dict values after construction. Unmapped keys keep their original name.
         """
         batch_mode = BatchMode.TRANSPOSE if replay else BatchMode.BATCH
         super().__init__(broker, channel, batch_mode, delivery_guarantee)
@@ -183,6 +187,7 @@ class CSVSource(Source):
         self.timestamp_mode = timestamp_mode
         self.timestamp_microseconds_column = timestamp_microseconds_column
         self.pack_remaining_as_value = pack_remaining_as_value
+        self.column_mapping = column_mapping or {}
 
     def _read_csv_rows(self) -> list[dict[str, Any]]:
         """Read CSV file and return list of row dicts.
@@ -329,6 +334,10 @@ class CSVSource(Source):
             value = {col: row[col] for col in self.value_columns if col in row}
         else:
             value = row.get(self.value_column)
+
+        # Apply column renaming to dict values
+        if self.column_mapping and isinstance(value, dict):
+            value = {self.column_mapping.get(k, k): v for k, v in value.items()}
 
         return Message(key=key, timestamp=timestamp, value=value, tags=tags)
 
