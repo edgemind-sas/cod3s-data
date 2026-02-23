@@ -180,3 +180,39 @@ class AlarmTransform(StatefulTransform):
 
         # No state change → no message
         return None
+
+
+class UnpackTransform(StatelessTransform):
+    """Unpack a dict-valued message into one message per key.
+
+    Each entry in the dict becomes a separate message with:
+    - key: the dict key name
+    - value: the corresponding scalar value
+    - timestamp: inherited from the original message
+    - tags: inherited from the original message
+
+    Non-dict values pass through unchanged.
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+    ) -> None:
+        def unpack_fn(msg: Message) -> Message | list[Message] | None:
+            if not isinstance(msg.value, dict):
+                return msg
+            if not msg.value:
+                return None
+            return [
+                Message(
+                    key=k,
+                    timestamp=msg.timestamp,
+                    value=v,
+                    tags=msg.tags,
+                )
+                for k, v in msg.value.items()
+            ]
+
+        super().__init__(broker, input_channels, output_channel, unpack_fn)
