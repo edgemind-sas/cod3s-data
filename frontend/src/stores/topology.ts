@@ -46,20 +46,30 @@ export const useTopologyStore = defineStore('topology', () => {
     }
   }
 
-  function markChannelActive(channel: string) {
-    if (!_channelCounters[channel]) {
-      _channelCounters[channel] = { count: 0, lastTick: Date.now() }
+  function _markSingle(ch: string) {
+    if (!_channelCounters[ch]) {
+      _channelCounters[ch] = { count: 0, lastTick: Date.now() }
     }
-    _channelCounters[channel].count++
+    _channelCounters[ch].count++
     _startTicker()
 
     // Reset inactivity timeout
-    if (_channelTimers[channel]) clearTimeout(_channelTimers[channel])
-    _channelTimers[channel] = setTimeout(() => {
-      channelRates[channel] = 0
-      delete _channelCounters[channel]
-      delete _channelTimers[channel]
+    if (_channelTimers[ch]) clearTimeout(_channelTimers[ch])
+    _channelTimers[ch] = setTimeout(() => {
+      channelRates[ch] = 0
+      delete _channelCounters[ch]
+      delete _channelTimers[ch]
     }, ACTIVITY_TIMEOUT_MS)
+  }
+
+  function markChannelActive(channel: string) {
+    _markSingle(channel)
+    // Also mark parent channels so parent-child edges (UnpackTransform) animate.
+    // e.g. "sensors.egm.pressure" → also marks "sensors.egm"
+    const parts = channel.split('.')
+    for (let i = parts.length - 1; i >= 2; i--) {
+      _markSingle(parts.slice(0, i).join('.'))
+    }
   }
 
   function isChannelActive(channel: string): boolean {

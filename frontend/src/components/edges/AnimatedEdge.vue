@@ -33,8 +33,10 @@ import { computed } from 'vue'
 import { BaseEdge, getSmoothStepPath } from '@vue-flow/core'
 import type { EdgeProps } from '@vue-flow/core'
 import { channelColor } from '@/utils/channelColors'
+import { useTopologyStore } from '@/stores/topology'
 
 const props = defineProps<EdgeProps>()
+const topologyStore = useTopologyStore()
 
 const pathParams = computed(() => getSmoothStepPath({
   sourceX: props.sourceX,
@@ -49,8 +51,16 @@ const path = computed(() => pathParams.value[0])
 const labelX = computed(() => pathParams.value[1])
 const labelY = computed(() => pathParams.value[2])
 
-const rate = computed(() => (props.data as any)?.rate ?? 0)
 const channel = computed(() => (props.data as any)?.channel ?? '')
+const pattern = computed(() => (props.data as any)?.pattern ?? '')
+
+// Read rate directly from the reactive store so animations update in real-time.
+// For parent-child edges (UnpackTransform), the publisher's channel (e.g. "sensors.egm")
+// has no direct traffic; the actual messages flow on the pattern channel
+// (e.g. "sensors.egm.pressure"), so we check both.
+const rate = computed(() =>
+  topologyStore.getChannelRate(channel.value) || topologyStore.getChannelRate(pattern.value)
+)
 const color = computed(() => channelColor(channel.value))
 
 type Tier = 'idle' | 'low' | 'medium' | 'high'

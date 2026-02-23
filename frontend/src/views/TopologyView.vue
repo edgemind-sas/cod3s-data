@@ -150,8 +150,7 @@ const flowEdges = computed<FlowEdge[]>(() =>
       markerEnd: { type: MarkerType.ArrowClosed },
       data: {
         channel: e.channel,
-        active: topologyStore.isChannelActive(e.channel),
-        rate: topologyStore.getChannelRate(e.channel),
+        pattern: e.pattern,
       },
     }))
 )
