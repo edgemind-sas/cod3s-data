@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:only": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && rm -rf ../cod3s_data/observatory/static/assets && cp -r dist/* ../cod3s_data/observatory/static/"
+    "deploy": "vite build && rm -rf ../cod3s_data/observatory/static/assets && mkdir -p ../cod3s_data/observatory/static && cp -r dist/* ../cod3s_data/observatory/static/"
   },
   "dependencies": {
     "@dagrejs/dagre": "^2.0.4",
