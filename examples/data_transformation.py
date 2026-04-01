@@ -132,9 +132,9 @@ async def main():
 
     # Verify the transformation pipeline worked correctly
     print("\nVerification:")
-    print(f"  - Input: 1-100 (100 numbers)")
-    print(f"  - After filter (evens): 50 numbers")
-    print(f"  - After map (squared): 50 numbers")
+    print("  - Input: 1-100 (100 numbers)")
+    print("  - After filter (evens): 50 numbers")
+    print("  - After map (squared): 50 numbers")
     print(f"  - After aggregate (window=5): {len(results)} sums")
 
     print("\nPipeline completed!")

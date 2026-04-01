@@ -7,10 +7,7 @@ or want to integrate with existing Python code.
 """
 
 import asyncio
-from datetime import datetime, timezone
-
 from cod3s_data.broker.in_memory import InMemoryBroker
-from cod3s_data.core.message import Message
 from cod3s_data.destinations.core import ConsoleDestination, InMemoryDestination
 from cod3s_data.sources.test_sources import RandomSource
 from cod3s_data.transformations.builtin import AggregateTransform, FilterTransform
@@ -110,7 +107,7 @@ async def main():
 
     # Get broker metrics
     metrics = broker.get_metrics()
-    print(f"\n📊 Broker Metrics:")
+    print("\n📊 Broker Metrics:")
     print(f"  • Messages published: {metrics['publish_count']}")
     print(f"  • Callbacks executed: {metrics['notify_count']}")
     print(f"  • Active subscriptions: {metrics['subscription_count']}")

@@ -167,7 +167,7 @@ def validate_pipeline(args: argparse.Namespace) -> int:
         return 0
 
     except Exception as e:
-        print(f"\n✗ Configuration is invalid!", file=sys.stderr)
+        print("\n✗ Configuration is invalid!", file=sys.stderr)
         print(f"Error: {e}", file=sys.stderr)
         if args.verbose:
             import traceback

@@ -42,6 +42,11 @@ class MapTransform(StatelessTransform):
         super().__init__(broker, input_channels, output_channel, transform_fn)
 
 
+def _default_aggregation(msgs: list[Message]) -> Any:
+    """Default aggregation: average of message values."""
+    return sum(msg.value for msg in msgs) / len(msgs)
+
+
 class AggregateTransform(StatefulTransform):
     """Aggregate messages over time or count windows."""
 
@@ -53,10 +58,7 @@ class AggregateTransform(StatefulTransform):
         window_type: str = "count",
         window_size: int | None = None,
         window_duration: float | None = None,
-        # fmt: off
-        aggregation_fn: Callable[[list[Message]], Any] = lambda msgs: sum(m.value for m in msgs)
-        / len(msgs),  # noqa: E501
-        # fmt: on
+        aggregation_fn: Callable[[list[Message]], Any] = _default_aggregation,
     ) -> None:
         super().__init__(broker, input_channels, output_channel)
         self.window_type = window_type
