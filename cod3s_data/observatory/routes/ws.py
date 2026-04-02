@@ -32,6 +32,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         }
         if debug is not None:
             connected_payload["debug"] = debug.get_state_dict()
+        connected_payload["pipeline_info"] = bridge.get_pipeline_info()
         connected_payload["pipeline_state"] = bridge.get_pipeline_state()
         connected_payload["components"] = bridge.get_components_snapshot()
         connected_payload["topology"] = bridge.get_topology_snapshot()

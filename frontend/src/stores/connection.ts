@@ -102,6 +102,9 @@ export const useConnectionStore = defineStore('connection', () => {
         if (msg.payload.debug) {
           debugStore.updateFromServer(msg.payload.debug as any)
         }
+        if (msg.payload.pipeline_info) {
+          pipelineStore.updateInfoFromServer(msg.payload.pipeline_info as any)
+        }
         if (msg.payload.pipeline_state) {
           pipelineStore.updateFromServer({ state: msg.payload.pipeline_state as any })
         }

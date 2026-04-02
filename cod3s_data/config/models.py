@@ -49,6 +49,8 @@ class PipelineConfig(BaseModel):
     """Top-level pipeline configuration."""
 
     name: str = Field(default="cod3s_pipeline", description="Pipeline name")
+    display_name: str | None = Field(default=None, description="Display name for Observatory UI")
+    subtitle: str | None = Field(default=None, description="Subtitle shown in Observatory UI")
     plugins: list[str] = Field(
         default_factory=list,
         description="Plugin module paths to load before creating components",

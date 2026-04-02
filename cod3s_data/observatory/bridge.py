@@ -448,6 +448,17 @@ class ObservatoryBridge:
             return "unknown"
         return self._framework._pipeline_state.value
 
+    def get_pipeline_info(self) -> dict[str, str]:
+        """Get pipeline display metadata for the Observatory UI."""
+        if self._framework is None:
+            return {"name": "", "display_name": "COD3S Observatory", "subtitle": ""}
+        config = self._framework.config
+        return {
+            "name": config.name,
+            "display_name": config.display_name or config.name,
+            "subtitle": config.subtitle or "",
+        }
+
     def get_components_snapshot(self) -> list[dict[str, str]]:
         """Get current list of pipeline components with their state."""
         if self._framework is None:

@@ -2,8 +2,9 @@
   <v-navigation-drawer permanent rail expand-on-hover>
     <v-list-item
       prepend-icon="mdi-telescope"
-      title="COD3S Observatory"
-      subtitle="v1.0.0"
+      :title="pipelineStore.displayName"
+      :subtitle="pipelineStore.subtitle || 'v1.0.0'"
+      class="sidebar-header"
     />
 
     <v-divider />
@@ -33,8 +34,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useConnectionStore } from '@/stores/connection'
+import { usePipelineStore } from '@/stores/pipeline'
 
 const connectionStore = useConnectionStore()
+const pipelineStore = usePipelineStore()
 
 const navItems = [
   { path: '/topology', title: 'Topology', icon: 'mdi-graph' },
@@ -62,3 +65,12 @@ const connectionClass = computed(() => ({
   'text-red': !connectionStore.connected && !connectionStore.reconnecting,
 }))
 </script>
+
+<style scoped>
+.sidebar-header :deep(.v-list-item-title),
+.sidebar-header :deep(.v-list-item-subtitle) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>

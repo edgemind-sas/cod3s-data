@@ -2,7 +2,8 @@
   <v-layout>
     <v-app-bar density="compact" flat>
       <v-app-bar-title class="text-body-1">
-        COD3S Observatory
+        {{ pipelineStore.displayName }}
+        <span v-if="pipelineStore.subtitle" class="text-caption text-medium-emphasis ml-2">{{ pipelineStore.subtitle }}</span>
       </v-app-bar-title>
       <template #append>
         <v-chip
