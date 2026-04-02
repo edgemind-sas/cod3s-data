@@ -101,6 +101,7 @@ export const useTopologyStore = defineStore('topology', () => {
       type: n.component_type as TopologyNode['type'],
       state: n.state,
       label: n.label || '',
+      description: n.description || '',
       channels: n.channels ?? { publishes: [], subscribes: [] },
     }))
     edges.value = data.edges.map(e => ({
@@ -124,6 +125,7 @@ export const useTopologyStore = defineStore('topology', () => {
         type: data.component_type as TopologyNode['type'],
         state: data.new_state,
         label: data.label || '',
+        description: '',
         channels: { publishes: [], subscribes: [] },
       })
     }

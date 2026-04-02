@@ -38,6 +38,11 @@
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="blue">mdi-database-arrow-right</v-icon>
               <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
+              <v-tooltip v-if="data.description" :text="data.description" location="top">
+                <template #activator="{ props }">
+                  <v-icon size="14" class="ml-1" color="rgba(255,255,255,0.6)" v-bind="props">mdi-information-outline</v-icon>
+                </template>
+              </v-tooltip>
             </div>
             <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
@@ -60,6 +65,11 @@
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="orange">mdi-cog</v-icon>
               <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
+              <v-tooltip v-if="data.description" :text="data.description" location="top">
+                <template #activator="{ props }">
+                  <v-icon size="14" class="ml-1" color="rgba(255,255,255,0.6)" v-bind="props">mdi-information-outline</v-icon>
+                </template>
+              </v-tooltip>
             </div>
             <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
@@ -85,6 +95,11 @@
             <div class="pipeline-node__header">
               <v-icon size="16" class="mr-1" color="green">mdi-database-arrow-left</v-icon>
               <span class="pipeline-node__label">{{ data.label || data.nodeId }}</span>
+              <v-tooltip v-if="data.description" :text="data.description" location="top">
+                <template #activator="{ props }">
+                  <v-icon size="14" class="ml-1" color="rgba(255,255,255,0.6)" v-bind="props">mdi-information-outline</v-icon>
+                </template>
+              </v-tooltip>
             </div>
             <div v-if="data.label" class="pipeline-node__id">{{ data.nodeId }}</div>
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
@@ -131,6 +146,7 @@ const flowNodes = computed<FlowNode[]>(() =>
     data: {
       nodeId: node.id,
       label: node.label,
+      description: node.description,
       state: node.state,
       channels: node.channels,
     },

@@ -34,6 +34,7 @@ export interface TopologyNode {
   type: 'source' | 'transformation' | 'destination'
   state: string
   label: string
+  description: string
   channels: ChannelInfo
 }
 

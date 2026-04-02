@@ -40,8 +40,8 @@ const navItems = [
   { path: '/topology', title: 'Topology', icon: 'mdi-graph' },
   { path: '/timeline', title: 'Timeline', icon: 'mdi-timeline' },
   { path: '/messages', title: 'Messages', icon: 'mdi-email-search-outline' },
-  { path: '/metrics', title: 'Metrics', icon: 'mdi-chart-line' },
-  { path: '/debug', title: 'Debug', icon: 'mdi-bug' },
+  // { path: '/metrics', title: 'Metrics', icon: 'mdi-chart-line' },
+  // { path: '/debug', title: 'Debug', icon: 'mdi-bug' },
 ]
 
 const connectionIcon = computed(() => {

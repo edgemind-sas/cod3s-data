@@ -48,26 +48,30 @@
       </template>
     </v-app-bar>
     <AppSidebar />
-    <v-main :style="{ paddingBottom: inspectorStore.isOpen ? inspectorStore.panelHeight + 'px' : '40px' }">
+    <v-main :style="{ paddingBottom: isMessagesRoute && inspectorStore.isOpen ? inspectorStore.panelHeight + 'px' : '40px' }">
       <v-container fluid class="pa-4">
         <slot />
       </v-container>
     </v-main>
-    <MessageInspector />
+    <MessageInspector v-if="isMessagesRoute" />
   </v-layout>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppSidebar from './AppSidebar.vue'
 import MessageInspector from '@/components/inspector/MessageInspector.vue'
 import { usePipeline } from '@/composables/usePipeline'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useInspectorStore } from '@/stores/inspector'
 
+const route = useRoute()
 const pipeline = usePipeline()
 const pipelineStore = usePipelineStore()
 const inspectorStore = useInspectorStore()
+
+const isMessagesRoute = computed(() => route.name === 'Messages')
 
 const stateColor = computed(() => {
   switch (pipelineStore.state) {

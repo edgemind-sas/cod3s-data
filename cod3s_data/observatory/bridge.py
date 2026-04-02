@@ -461,6 +461,7 @@ class ObservatoryBridge:
                     "component_type": "source",
                     "state": state,
                     "label": source._label,
+                    "description": getattr(source, "_description", ""),
                 }
             )
         for tfm in self._framework.transformations:
@@ -471,6 +472,7 @@ class ObservatoryBridge:
                     "component_type": "transformation",
                     "state": state,
                     "label": tfm._label,
+                    "description": getattr(tfm, "_description", ""),
                 }
             )
         for dest in self._framework.destinations:
@@ -481,6 +483,7 @@ class ObservatoryBridge:
                     "component_type": "destination",
                     "state": state,
                     "label": dest._label,
+                    "description": getattr(dest, "_description", ""),
                 }
             )
         return components
@@ -502,6 +505,7 @@ class ObservatoryBridge:
                     "component_type": "source",
                     "state": state,
                     "label": source._label,
+                    "description": getattr(source, "_description", ""),
                     "channels": {
                         "publishes": [source.channel],
                         "subscribes": [],
@@ -518,6 +522,7 @@ class ObservatoryBridge:
                     "component_type": "transformation",
                     "state": state,
                     "label": tfm._label,
+                    "description": getattr(tfm, "_description", ""),
                     "channels": {
                         "publishes": [tfm.output_channel],
                         "subscribes": list(tfm.input_channels),
@@ -536,6 +541,7 @@ class ObservatoryBridge:
                     "component_type": "destination",
                     "state": state,
                     "label": dest._label,
+                    "description": getattr(dest, "_description", ""),
                     "channels": {
                         "publishes": [],
                         "subscribes": [dest.channel_pattern],
