@@ -5,7 +5,7 @@ import csv
 import io
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +135,8 @@ class CSVSource(Source):
         pack_remaining_as_value: bool = False,
         # --- Column renaming ---
         column_mapping: dict[str, str] | None = None,
+        # --- Timestamp rebasing ---
+        rebase_timestamps: bool = False,
     ) -> None:
         """
         Initialize CSV source.
@@ -165,6 +167,9 @@ class CSVSource(Source):
                 become the value dict
             column_mapping: Optional dict mapping original column names to new names.
                 Applied to dict values after construction. Unmapped keys keep their original name.
+            rebase_timestamps: When True, translate all timestamps so that the first message
+                has timestamp=now(). Useful for replay mode so data appears as "live" in
+                time-series tools like Grafana.
         """
         batch_mode = BatchMode.TRANSPOSE if replay else BatchMode.BATCH
         super().__init__(broker, channel, batch_mode, delivery_guarantee)
@@ -188,6 +193,7 @@ class CSVSource(Source):
         self.timestamp_microseconds_column = timestamp_microseconds_column
         self.pack_remaining_as_value = pack_remaining_as_value
         self.column_mapping = column_mapping or {}
+        self.rebase_timestamps = rebase_timestamps
 
     def _read_csv_rows(self) -> list[dict[str, Any]]:
         """Read CSV file and return list of row dicts.
@@ -253,8 +259,16 @@ class CSVSource(Source):
         rows = self._read_csv_rows()
 
         prev_ts: datetime | None = None
+        ts_offset: timedelta | None = None
         for row in rows:
             message = self._parse_row(row)
+
+            if self.rebase_timestamps:
+                if ts_offset is None:
+                    ts_offset = datetime.now(UTC) - message.timestamp
+                message = message.model_copy(
+                    update={"timestamp": message.timestamp + ts_offset}
+                )
 
             if self.replay and prev_ts is not None:
                 delta = (message.timestamp - prev_ts).total_seconds() / self.speed_factor
