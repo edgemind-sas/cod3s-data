@@ -650,12 +650,15 @@ class RelativeAlarmTransform(StatefulTransform):
         if self.tolerance_pct is not None and sp != 0:
             original_value["deviation_pct"] = round(abs(deviation) / abs(sp) * 100.0, 4)
 
+        direction = "" if status == "CLEARED" else ("OVER" if deviation > 0 else "UNDER")
+
         return Message(
             key=f"{message.key}.alarm",
             timestamp=message.timestamp,
             value={
                 "status": status,
                 "alarm_type": self.alarm_type_label,
+                "direction": direction,
                 "original_value": original_value,
             },
             tags={**message.tags},
