@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import structlog
@@ -157,6 +158,36 @@ class InfluxDBDestination(Destination):
             await self._ensure_client()
         point = self._message_to_point(message)
         await self._write_api.write(bucket=self.bucket, record=point)
+
+    async def _write_batch_with_retry(self, batch: list[Message]) -> None:
+        """Write a whole batch of messages in a single InfluxDB HTTP call.
+
+        Overrides the per-message loop in :class:`Destination` so the writer
+        keeps up with high-throughput streams (the per-message default does
+        N sequential HTTP requests per batch and quickly becomes the
+        bottleneck under bursty loads).
+        """
+        if not batch:
+            return
+        if self._client is None:
+            await self._ensure_client()
+        points = [self._message_to_point(msg) for msg in batch]
+        for attempt in range(self.retry_attempts):
+            try:
+                await self._write_api.write(bucket=self.bucket, record=points)
+                self._message_count += len(batch)
+                return
+            except Exception:
+                if attempt >= self.retry_attempts - 1:
+                    self._error_count += len(batch)
+                    if self.dlq_channel:
+                        for msg in batch:
+                            try:
+                                await self.broker.publish(self.dlq_channel, msg)
+                            except Exception:
+                                pass
+                    return
+                await asyncio.sleep(self._calculate_backoff(attempt))
 
     async def close(self) -> None:
         """Close the InfluxDB client connection."""
