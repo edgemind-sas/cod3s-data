@@ -11,8 +11,12 @@ from cod3s_data.destinations import CollectDestination
 from cod3s_data.transformations import (
     AggregateTransform,
     AlarmTransform,
+    DeviationFilterTransform,
     FilterTransform,
     MapTransform,
+    MedianFilterTransform,
+    MovingAverageTransform,
+    RelativeAlarmTransform,
     StatefulTransform,
     StatelessTransform,
     ThrottleTransform,
@@ -619,6 +623,62 @@ class TestThrottleTransform:
         await dest.stop()
         await broker.stop()
 
+    @pytest.mark.asyncio
+    async def test_per_key_throttles_each_key_independently(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel")
+        await dest.start()
+
+        transform = ThrottleTransform(
+            broker, "input.channel", "output.channel", interval=1.0, per_key=True
+        )
+        await transform.start()
+
+        # Burst: 3 messages of "a" then 3 of "b" within the throttle interval.
+        # Per-key throttling should let the first of each key through.
+        for _ in range(3):
+            await broker.publish("input.channel", create_message(key="a", value=1.0))
+        for _ in range(3):
+            await broker.publish("input.channel", create_message(key="b", value=2.0))
+        await asyncio.sleep(0.05)
+
+        messages = dest.get_all()
+        keys = [m.key for m in messages]
+        assert sorted(keys) == ["a", "b"]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_key_allows_second_emit_after_interval(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dest = CollectDestination(broker, "output.channel")
+        await dest.start()
+
+        transform = ThrottleTransform(
+            broker, "input.channel", "output.channel", interval=0.15, per_key=True
+        )
+        await transform.start()
+
+        await broker.publish("input.channel", create_message(key="a", value=1.0))
+        await broker.publish("input.channel", create_message(key="b", value=2.0))
+        await asyncio.sleep(0.2)
+        await broker.publish("input.channel", create_message(key="a", value=3.0))
+        await broker.publish("input.channel", create_message(key="b", value=4.0))
+        await asyncio.sleep(0.05)
+
+        messages = dest.get_all()
+        assert len(messages) == 4
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
 
 class TestUnpackTransform:
     @pytest.mark.asyncio
@@ -895,3 +955,430 @@ class TestTransformationChaining:
         await transform.stop()
         await dest.stop()
         await broker.stop()
+
+
+def _make_message(key: str, value: float, ts: datetime | None = None) -> Message:
+    return Message(key=key, timestamp=ts or datetime.now(UTC), value=value, tags={})
+
+
+class TestMovingAverageTransform:
+    @pytest.mark.asyncio
+    async def test_count_window_mean(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MovingAverageTransform(
+            broker, "in", "out", window_type="count", window_size=3
+        )
+        await transform.start()
+
+        for v in [10.0, 20.0, 30.0, 40.0]:
+            await broker.publish("in", _make_message("temp", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        # First message has 1 sample (avg=10), then 2 (15), then 3 (20), then sliding 3 (30)
+        assert [m.value for m in msgs] == [10.0, 15.0, 20.0, 30.0]
+        # Key preserved
+        assert all(m.key == "temp" for m in msgs)
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_min_samples_skips_initial(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MovingAverageTransform(
+            broker, "in", "out", window_type="count", window_size=5, min_samples=3
+        )
+        await transform.start()
+
+        for v in [1.0, 2.0, 3.0, 4.0]:
+            await broker.publish("in", _make_message("k", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        # First two messages skipped (not enough samples), then mean of 3 then 4
+        assert [m.value for m in msgs] == [2.0, 2.5]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_key_isolation(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MovingAverageTransform(
+            broker, "in", "out", window_type="count", window_size=2
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_message("a", 100.0))
+        await broker.publish("in", _make_message("b", 1.0))
+        await broker.publish("in", _make_message("a", 200.0))
+        await broker.publish("in", _make_message("b", 3.0))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert msgs[0].key == "a" and msgs[0].value == 100.0
+        assert msgs[1].key == "b" and msgs[1].value == 1.0
+        assert msgs[2].key == "a" and msgs[2].value == 150.0
+        assert msgs[3].key == "b" and msgs[3].value == 2.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_time_window(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MovingAverageTransform(
+            broker, "in", "out", window_type="time", window_duration=1.0
+        )
+        await transform.start()
+
+        base = datetime.now(UTC)
+        # Three messages at t=0, t=0.5s, t=2.0s — last one drops the first two
+        from datetime import timedelta
+
+        await broker.publish("in", _make_message("k", 10.0, base))
+        await broker.publish("in", _make_message("k", 20.0, base + timedelta(milliseconds=500)))
+        await broker.publish("in", _make_message("k", 100.0, base + timedelta(seconds=2)))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert msgs[0].value == 10.0  # only itself in window
+        assert msgs[1].value == 15.0  # mean of 10,20
+        assert msgs[2].value == 100.0  # window expired, only newest
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_skipped(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MovingAverageTransform(
+            broker, "in", "out", window_type="count", window_size=3
+        )
+        await transform.start()
+
+        await broker.publish(
+            "in", Message(key="k", timestamp=datetime.now(UTC), value="bad", tags={})
+        )
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_key_suffix_publishes_per_key_subchannel(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        # Subscribe with a wildcard on per-key sub-channels
+        wildcard_dest = CollectDestination(broker, "out.*")
+        await wildcard_dest.start()
+
+        transform = MovingAverageTransform(
+            broker,
+            "in",
+            "out",
+            window_type="count",
+            window_size=2,
+            key_suffix="_smoothed",
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_message("temp_top", 100.0))
+        await broker.publish("in", _make_message("temp_top", 200.0))
+        await asyncio.sleep(0.1)
+
+        msgs = wildcard_dest.get_all()
+        # First message: 1 sample (avg=100), second: 2 samples (avg=150)
+        assert [m.value for m in msgs] == [100.0, 150.0]
+        assert all(m.key == "temp_top_smoothed" for m in msgs)
+
+        await transform.stop()
+        await wildcard_dest.stop()
+        await broker.stop()
+
+    def test_invalid_config(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError):
+            MovingAverageTransform(broker, "in", "out", window_type="bogus")
+        with pytest.raises(ValueError):
+            MovingAverageTransform(broker, "in", "out", window_type="count")
+        with pytest.raises(ValueError):
+            MovingAverageTransform(broker, "in", "out", window_type="time")
+
+
+class TestMedianFilterTransform:
+    @pytest.mark.asyncio
+    async def test_outlier_robust(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = MedianFilterTransform(
+            broker, "in", "out", window_type="count", window_size=5, min_samples=5
+        )
+        await transform.start()
+
+        # Median is robust to a single 1000.0 spike
+        for v in [10.0, 11.0, 1000.0, 12.0, 13.0]:
+            await broker.publish("in", _make_message("k", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 1
+        assert msgs[0].value == 12.0  # median of [10,11,1000,12,13]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+
+class TestDeviationFilterTransform:
+    @pytest.mark.asyncio
+    async def test_reject_pct(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = DeviationFilterTransform(
+            broker, "in", "out", setpoint=300.0, tolerance_pct=3.0, mode="reject"
+        )
+        await transform.start()
+
+        # +3% of 300 = 9 → bounds [291, 309]
+        for v in [300.0, 305.0, 320.0, 295.0, 280.0]:
+            await broker.publish("in", _make_message("k", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.value for m in msgs] == [300.0, 305.0, 295.0]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_clip_abs(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = DeviationFilterTransform(
+            broker, "in", "out", setpoint=100.0, tolerance_abs=10.0, mode="clip"
+        )
+        await transform.start()
+
+        for v in [100.0, 95.0, 150.0, 50.0]:
+            await broker.publish("in", _make_message("k", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.value for m in msgs] == [100.0, 95.0, 110.0, 90.0]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_key_setpoint(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = DeviationFilterTransform(
+            broker,
+            "in",
+            "out",
+            setpoint={"a": 100.0, "b": 10.0},
+            tolerance_abs=1.0,
+            mode="reject",
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_message("a", 100.5))  # in band
+        await broker.publish("in", _make_message("a", 200.0))  # out
+        await broker.publish("in", _make_message("b", 9.5))  # in band
+        await broker.publish("in", _make_message("b", 50.0))  # out
+        await broker.publish("in", _make_message("c", 99.0))  # no setpoint → pass-through
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        keys_values = [(m.key, m.value) for m in msgs]
+        assert keys_values == [("a", 100.5), ("b", 9.5), ("c", 99.0)]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_invalid_config(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError):
+            DeviationFilterTransform(broker, "in", "out", setpoint=10.0)
+        with pytest.raises(ValueError):
+            DeviationFilterTransform(
+                broker, "in", "out", setpoint=10.0, tolerance_pct=1.0, tolerance_abs=1.0
+            )
+        with pytest.raises(ValueError):
+            DeviationFilterTransform(
+                broker, "in", "out", setpoint=10.0, tolerance_abs=1.0, mode="bogus"
+            )
+
+
+class TestRelativeAlarmTransform:
+    @pytest.mark.asyncio
+    async def test_transitions_only(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = RelativeAlarmTransform(
+            broker, "in", "out", setpoint=300.0, tolerance_abs=10.0
+        )
+        await transform.start()
+
+        # ok, ok, ALARM (transition emit), ALARM (no emit), ok (transition emit), ok (no emit)
+        for v in [300.0, 305.0, 320.0, 325.0, 300.0, 301.0]:
+            await broker.publish("in", _make_message("temp", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 2
+        assert msgs[0].key == "temp.alarm"
+        assert msgs[0].value["status"] == "ACTIVE"
+        assert msgs[0].value["original_value"]["actual"] == 320.0
+        assert msgs[0].value["original_value"]["setpoint"] == 300.0
+        assert msgs[1].value["status"] == "CLEARED"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_key_state(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = RelativeAlarmTransform(
+            broker,
+            "in",
+            "out",
+            setpoint={"top": 300.0, "bottom": 100.0},
+            tolerance_abs=5.0,
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_message("top", 320.0))  # ACTIVE top
+        await broker.publish("in", _make_message("bottom", 100.0))  # OK bottom (no emit)
+        await broker.publish("in", _make_message("bottom", 120.0))  # ACTIVE bottom
+        await broker.publish("in", _make_message("top", 300.0))  # CLEARED top
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        statuses = [(m.key, m.value["status"]) for m in msgs]
+        assert statuses == [
+            ("top.alarm", "ACTIVE"),
+            ("bottom.alarm", "ACTIVE"),
+            ("top.alarm", "CLEARED"),
+        ]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_tolerance_pct(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = RelativeAlarmTransform(
+            broker,
+            "in",
+            "out",
+            setpoint=200.0,
+            tolerance_pct=5.0,
+            alarm_type_label="speed_dev",
+        )
+        await transform.start()
+
+        # 5% of 200 = 10 → bounds [190, 210]
+        await broker.publish("in", _make_message("speed", 215.0))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 1
+        assert msgs[0].value["alarm_type"] == "speed_dev"
+        assert "deviation_pct" in msgs[0].value["original_value"]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_setpoint_skipped(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = RelativeAlarmTransform(
+            broker,
+            "in",
+            "out",
+            setpoint={"a": 100.0},
+            tolerance_abs=1.0,
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_message("b", 999.0))  # no setpoint → ignored
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_invalid_config(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError):
+            RelativeAlarmTransform(broker, "in", "out", setpoint=10.0)
+        with pytest.raises(ValueError):
+            RelativeAlarmTransform(
+                broker, "in", "out", setpoint=10.0, tolerance_pct=1.0, tolerance_abs=1.0
+            )

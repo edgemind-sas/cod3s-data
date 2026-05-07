@@ -1,5 +1,7 @@
 """Built-in transformations for COD3S Data Framework."""
 
+import statistics
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -212,7 +214,6 @@ class ThrottleTransform(StatefulTransform):
 
         now = time.monotonic()
         last_emit = state.get("last_emit", 0.0)
-
         if now - last_emit >= self.interval:
             state["last_emit"] = now
             return message
@@ -310,3 +311,337 @@ class UnpackTransform(Transformation):
 
         except Exception:
             pass
+
+
+class _SlidingWindowTransform(StatefulTransform):
+    """Base for sliding-window aggregations (mean, median, ...).
+
+    Per-key buffer; emits on every input message once min_samples is reached.
+    Differs from AggregateTransform (tumbling, global): this is sliding, per-key.
+
+    Optional ``key_suffix`` is appended to the output ``message.key`` (and
+    re-published on a sub-channel ``{output_channel}.{new_key}``). This lets
+    smoothed signals coexist with their raw counterparts in downstream sinks
+    that key by ``message.key`` (e.g. InfluxDB measurements).
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        *,
+        window_type: str = "count",
+        window_size: int | None = None,
+        window_duration: float | None = None,
+        min_samples: int = 1,
+        key_suffix: str = "",
+    ) -> None:
+        if window_type not in ("count", "time"):
+            raise ValueError(f"window_type must be 'count' or 'time', got {window_type!r}")
+        if window_type == "count" and not window_size:
+            raise ValueError("window_type='count' requires window_size")
+        if window_type == "time" and not window_duration:
+            raise ValueError("window_type='time' requires window_duration")
+        super().__init__(broker, input_channels, output_channel)
+        self.window_type = window_type
+        self.window_size = window_size
+        self.window_duration = window_duration
+        self.min_samples = min_samples
+        self.key_suffix = key_suffix
+
+    def _aggregate(self, values: list[float]) -> float:
+        raise NotImplementedError
+
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        if not isinstance(message.value, int | float):
+            return None
+
+        buffers: dict[str, deque[tuple[datetime, float]]] = state.setdefault("buffers", {})
+        buf = buffers.setdefault(message.key, deque())
+        buf.append((message.timestamp, float(message.value)))
+
+        if self.window_type == "count":
+            assert self.window_size is not None
+            while len(buf) > self.window_size:
+                buf.popleft()
+        else:  # time
+            assert self.window_duration is not None
+            cutoff = message.timestamp.timestamp() - self.window_duration
+            while buf and buf[0][0].timestamp() < cutoff:
+                buf.popleft()
+
+        if len(buf) < self.min_samples:
+            return None
+
+        values = [v for _, v in buf]
+        new_key = f"{message.key}{self.key_suffix}" if self.key_suffix else message.key
+        return Message(
+            key=new_key,
+            timestamp=message.timestamp,
+            value=self._aggregate(values),
+            tags=message.tags,
+        )
+
+    async def _process_message(self, message: Message) -> None:
+        """Override base routing when ``key_suffix`` is set.
+
+        When ``key_suffix`` is non-empty, publish on a per-key sub-channel
+        ``{output_channel}.{new_key}`` (mirroring :class:`UnpackTransform`)
+        so downstream wildcards like ``output_channel.*`` dispatch by key
+        without causing duplicate deliveries via deeper wildcards
+        (``sensors.**``). When ``key_suffix`` is empty the base behavior
+        (single publish on ``output_channel``) is used unchanged.
+        """
+        if not self.key_suffix:
+            await super()._process_message(message)
+            return
+
+        try:
+            if self._bridge is not None:
+                try:  # noqa: SIM105
+                    await self._bridge.on_message_received(
+                        self._component_id, "transformation", message
+                    )
+                except Exception:
+                    pass
+
+            results = await self.transform(message)
+            if not results:
+                return
+
+            out_list = results if isinstance(results, list) else [results]
+            for result in out_list:
+                await self.broker.publish(f"{self.output_channel}.{result.key}", result)
+
+            if self._bridge is not None:
+                try:  # noqa: SIM105
+                    await self._bridge.on_message_processed(
+                        self._component_id,
+                        "transformation",
+                        message,
+                        out_list,
+                        self.output_channel,
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+class MovingAverageTransform(_SlidingWindowTransform):
+    """Sliding-window mean per key.
+
+    Emits one smoothed message per input message (preserves key, timestamp, tags),
+    once at least ``min_samples`` values are buffered for that key.
+
+    Use this for time-series smoothing on per-sensor channels (e.g. ``sensors.egm.*``).
+    For tumbling-window aggregation (one output per closed window) use
+    :class:`AggregateTransform` instead.
+    """
+
+    def _aggregate(self, values: list[float]) -> float:
+        return sum(values) / len(values)
+
+
+class MedianFilterTransform(_SlidingWindowTransform):
+    """Sliding-window median per key.
+
+    Like :class:`MovingAverageTransform` but uses the median, which is more
+    robust to isolated spikes/outliers in the buffer.
+    """
+
+    def _aggregate(self, values: list[float]) -> float:
+        return statistics.median(values)
+
+
+class DeviationFilterTransform(StatelessTransform):
+    """Reject or clip values that deviate from a setpoint by more than a tolerance.
+
+    The setpoint can be a single scalar (applied to all keys) or a dict
+    ``{key: setpoint}`` for per-key thresholds. Messages whose key is not
+    in the dict pass through unchanged. Non-numeric values pass through.
+
+    Exactly one of ``tolerance_pct`` (percentage of the setpoint) or
+    ``tolerance_abs`` (absolute units) must be provided.
+
+    - mode='reject': drop messages outside the tolerance band (return None)
+    - mode='clip':   clamp value to ``[setpoint - tol, setpoint + tol]``
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        *,
+        setpoint: float | dict[str, float],
+        tolerance_pct: float | None = None,
+        tolerance_abs: float | None = None,
+        mode: str = "reject",
+        key_suffix: str = "",
+    ) -> None:
+        if (tolerance_pct is None) == (tolerance_abs is None):
+            raise ValueError(
+                "DeviationFilterTransform requires exactly one of "
+                "tolerance_pct or tolerance_abs"
+            )
+        if mode not in ("reject", "clip"):
+            raise ValueError(f"mode must be 'reject' or 'clip', got {mode!r}")
+
+        self.setpoint = setpoint
+        self.tolerance_pct = tolerance_pct
+        self.tolerance_abs = tolerance_abs
+        self.mode = mode
+        self.key_suffix = key_suffix
+
+        def filter_fn(msg: Message) -> Message | None:
+            return self._apply(msg)
+
+        super().__init__(broker, input_channels, output_channel, filter_fn)
+
+    def _resolve_setpoint(self, key: str) -> float | None:
+        if isinstance(self.setpoint, dict):
+            return self.setpoint.get(key)
+        return float(self.setpoint)
+
+    def _tolerance(self, sp: float) -> float:
+        if self.tolerance_abs is not None:
+            return self.tolerance_abs
+        assert self.tolerance_pct is not None
+        return abs(sp) * self.tolerance_pct / 100.0
+
+    def _apply(self, msg: Message) -> Message | None:
+        if not isinstance(msg.value, int | float):
+            return self._with_suffix(msg)
+        sp = self._resolve_setpoint(msg.key)
+        if sp is None:
+            return self._with_suffix(msg)
+
+        tol = self._tolerance(sp)
+        value = float(msg.value)
+        deviation = abs(value - sp)
+
+        if deviation <= tol:
+            return self._with_suffix(msg)
+
+        if self.mode == "reject":
+            return None
+        clipped = max(sp - tol, min(sp + tol, value))
+        return self._with_suffix(msg.with_value(clipped))
+
+    def _with_suffix(self, msg: Message) -> Message:
+        if not self.key_suffix:
+            return msg
+        return Message(
+            key=f"{msg.key}{self.key_suffix}",
+            timestamp=msg.timestamp,
+            value=msg.value,
+            tags=msg.tags,
+        )
+
+
+class RelativeAlarmTransform(StatefulTransform):
+    """Alarm on |value - setpoint| > tolerance, per-key state, transitions only.
+
+    Generalises absolute-threshold alarms (cf. :class:`AlarmTransform`) by
+    monitoring deviation from a target value (the setpoint). Emits only on
+    state transitions OK -> ACTIVE and ACTIVE -> CLEARED, suppressing repeats.
+
+    State is tracked **per message key**, so a single transform on a wildcard
+    channel (e.g. ``sensors.smoothed.*``) handles each sensor independently.
+
+    The setpoint can be a scalar (applied to every key) or a per-key dict.
+    Messages with no setpoint mapping or non-numeric values are ignored.
+
+    Exactly one of ``tolerance_pct`` or ``tolerance_abs`` must be provided.
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        *,
+        setpoint: float | dict[str, float],
+        tolerance_pct: float | None = None,
+        tolerance_abs: float | None = None,
+        alarm_type_label: str = "relative_threshold",
+    ) -> None:
+        if (tolerance_pct is None) == (tolerance_abs is None):
+            raise ValueError(
+                "RelativeAlarmTransform requires exactly one of "
+                "tolerance_pct or tolerance_abs"
+            )
+        super().__init__(broker, input_channels, output_channel)
+        self.setpoint = setpoint
+        self.tolerance_pct = tolerance_pct
+        self.tolerance_abs = tolerance_abs
+        self.alarm_type_label = alarm_type_label
+
+    def _resolve_setpoint(self, key: str) -> float | None:
+        if isinstance(self.setpoint, dict):
+            return self.setpoint.get(key)
+        return float(self.setpoint)
+
+    def _tolerance(self, sp: float) -> float:
+        if self.tolerance_abs is not None:
+            return self.tolerance_abs
+        assert self.tolerance_pct is not None
+        return abs(sp) * self.tolerance_pct / 100.0
+
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        if not isinstance(message.value, int | float):
+            return None
+        sp = self._resolve_setpoint(message.key)
+        if sp is None:
+            return None
+
+        tol = self._tolerance(sp)
+        value = float(message.value)
+        deviation = value - sp
+        is_alarm = abs(deviation) > tol
+
+        per_key: dict[str, str] = state.setdefault("status", {})
+        prev = per_key.get(message.key, "OK")
+
+        if is_alarm and prev == "OK":
+            per_key[message.key] = "ALARM"
+            return self._build_alarm(message, value, sp, deviation, tol, "ACTIVE")
+        if not is_alarm and prev == "ALARM":
+            per_key[message.key] = "OK"
+            return self._build_alarm(message, value, sp, deviation, tol, "CLEARED")
+        return None
+
+    def _build_alarm(
+        self,
+        message: Message,
+        value: float,
+        sp: float,
+        deviation: float,
+        tolerance: float,
+        status: str,
+    ) -> Message:
+        original_value: dict[str, Any] = {
+            "actual": value,
+            "setpoint": sp,
+            "deviation": round(deviation, 4),
+            "tolerance": tolerance,
+        }
+        if self.tolerance_pct is not None and sp != 0:
+            original_value["deviation_pct"] = round(abs(deviation) / abs(sp) * 100.0, 4)
+
+        return Message(
+            key=f"{message.key}.alarm",
+            timestamp=message.timestamp,
+            value={
+                "status": status,
+                "alarm_type": self.alarm_type_label,
+                "original_value": original_value,
+            },
+            tags={**message.tags},
+        )

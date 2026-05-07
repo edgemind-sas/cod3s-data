@@ -8,8 +8,12 @@ from cod3s_data.transformations.base import (
 from cod3s_data.transformations.builtin import (
     AggregateTransform,
     AlarmTransform,
+    DeviationFilterTransform,
     FilterTransform,
     MapTransform,
+    MedianFilterTransform,
+    MovingAverageTransform,
+    RelativeAlarmTransform,
     ThrottleTransform,
     UnpackTransform,
 )
@@ -24,4 +28,8 @@ __all__ = [
     "AlarmTransform",
     "ThrottleTransform",
     "UnpackTransform",
+    "MovingAverageTransform",
+    "MedianFilterTransform",
+    "DeviationFilterTransform",
+    "RelativeAlarmTransform",
 ]

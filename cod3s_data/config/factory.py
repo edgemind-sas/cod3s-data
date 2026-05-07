@@ -21,8 +21,12 @@ from cod3s_data.transformations.base import Transformation
 from cod3s_data.transformations.builtin import (
     AggregateTransform,
     AlarmTransform,
+    DeviationFilterTransform,
     FilterTransform,
     MapTransform,
+    MedianFilterTransform,
+    MovingAverageTransform,
+    RelativeAlarmTransform,
     ThrottleTransform,
     UnpackTransform,
 )
@@ -48,6 +52,10 @@ class ComponentFactory:
             "alarm": self._create_alarm_transform,
             "throttle": self._create_throttle_transform,
             "unpack": UnpackTransform,
+            "moving_average": self._create_moving_average_transform,
+            "median_filter": self._create_median_filter_transform,
+            "deviation_filter": self._create_deviation_filter_transform,
+            "relative_alarm": self._create_relative_alarm_transform,
         }
         self._destination_registry: dict[str, Callable[..., Destination]] = {
             "console": ConsoleDestination,
@@ -232,3 +240,43 @@ class ComponentFactory:
     ) -> AlarmTransform:
         """Create AlarmTransform from config."""
         return AlarmTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_moving_average_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> MovingAverageTransform:
+        """Create MovingAverageTransform from config."""
+        return MovingAverageTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_median_filter_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> MedianFilterTransform:
+        """Create MedianFilterTransform from config."""
+        return MedianFilterTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_deviation_filter_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> DeviationFilterTransform:
+        """Create DeviationFilterTransform from config."""
+        return DeviationFilterTransform(broker, input_channels, output_channel, **kwargs)
+
+    def _create_relative_alarm_transform(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        **kwargs: Any,
+    ) -> RelativeAlarmTransform:
+        """Create RelativeAlarmTransform from config."""
+        return RelativeAlarmTransform(broker, input_channels, output_channel, **kwargs)
