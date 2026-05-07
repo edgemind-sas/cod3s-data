@@ -194,6 +194,11 @@ class ThrottleTransform(StatefulTransform):
 
     Forwards the first message immediately, then suppresses subsequent
     messages until ``interval`` seconds have elapsed since the last emit.
+
+    With ``per_key=True``, each ``message.key`` is throttled independently —
+    useful when downsampling a wildcard-subscribed stream where every key
+    should keep its own emit cadence (e.g. one InfluxDB point every 100 ms
+    per sensor channel).
     """
 
     def __init__(
@@ -202,9 +207,11 @@ class ThrottleTransform(StatefulTransform):
         input_channels: str | list[str],
         output_channel: str,
         interval: float = 1.0,
+        per_key: bool = False,
     ) -> None:
         super().__init__(broker, input_channels, output_channel)
         self.interval = interval
+        self.per_key = per_key
 
     async def transform_with_state(
         self, message: Message, state: dict[str, Any]
@@ -213,6 +220,14 @@ class ThrottleTransform(StatefulTransform):
         import time
 
         now = time.monotonic()
+        if self.per_key:
+            per_key_state: dict[str, float] = state.setdefault("last_emit", {})
+            last_emit = per_key_state.get(message.key, 0.0)
+            if now - last_emit >= self.interval:
+                per_key_state[message.key] = now
+                return message
+            return None
+
         last_emit = state.get("last_emit", 0.0)
         if now - last_emit >= self.interval:
             state["last_emit"] = now
