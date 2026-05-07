@@ -15,6 +15,26 @@ from cod3s_data.destinations.base import Destination, RetryStrategy
 _logger = structlog.get_logger()
 
 
+def _flatten_fields(
+    value: dict[str, Any], prefix: str = ""
+) -> list[tuple[str, Any]]:
+    """Flatten a (possibly nested) dict into [(key, scalar)] pairs.
+
+    InfluxDB Point fields accept only scalars (int/float/bool/str). Nested
+    dicts (e.g. alarm messages with ``original_value``) get flattened with
+    dot-separated keys: ``{"original_value": {"actual": 1.0}}`` becomes
+    ``[("original_value.actual", 1.0)]``.
+    """
+    out: list[tuple[str, Any]] = []
+    for k, v in value.items():
+        full_key = f"{prefix}{k}"
+        if isinstance(v, dict):
+            out.extend(_flatten_fields(v, prefix=f"{full_key}."))
+        else:
+            out.append((full_key, v))
+    return out
+
+
 class InfluxDBDestination(Destination):
     """Write messages to InfluxDB 2.x as time-series data points.
 
@@ -128,8 +148,12 @@ class InfluxDBDestination(Destination):
             point.tag(tag_key, tag_value)  # type: ignore[no-untyped-call]
 
         # Fields: from message.value
+        # InfluxDB fields only accept scalars, so nested dicts are flattened
+        # with dot notation (e.g. {"original_value": {"actual": 1}} →
+        # field "original_value.actual" = 1). Without this, alarm messages
+        # whose value is a dict containing a sub-dict would fail to write.
         if isinstance(message.value, dict):
-            for field_key, field_value in message.value.items():
+            for field_key, field_value in _flatten_fields(message.value):
                 point.field(field_key, field_value)  # type: ignore[no-untyped-call]
         else:
             point.field("value", message.value)  # type: ignore[no-untyped-call]
