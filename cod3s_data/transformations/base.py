@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import structlog
 
 from cod3s_data.broker.base import Broker, SubscriptionHandle
 from cod3s_data.core.message import Message
+
+if TYPE_CHECKING:
+    from cod3s_data.transformations.param_store import ParameterStore
 
 _logger = structlog.get_logger()
 
@@ -28,6 +31,7 @@ class Transformation(ABC):
         self.output_channel = output_channel
         self._running = False
         self._subscription_handles: list[SubscriptionHandle] = []
+        self._param_stores: list[ParameterStore] = []
 
         # Observatory bridge (set by Framework when observatory is active)
         self._bridge: Any = None
@@ -37,6 +41,9 @@ class Transformation(ABC):
     async def start(self) -> None:
         """Start the transformation."""
         self._running = True
+        # Hydrate dynamic parameters before subscribing to data inputs
+        for store in self._param_stores:
+            await store.start()
         for channel in self.input_channels:
             handle = self.broker.subscribe(channel, self._process_message)
             self._subscription_handles.append(handle)
@@ -48,6 +55,8 @@ class Transformation(ABC):
         for handle in self._subscription_handles:
             self.broker.unsubscribe(handle)
         self._subscription_handles.clear()
+        for store in self._param_stores:
+            await store.stop()
         await self._notify_state_change("running", "stopped")
 
     async def _process_message(self, message: Message) -> None:

@@ -170,6 +170,30 @@ async def _handle_command(
             "payload": {"message": str(e)},
         }
 
+    if cmd_type == "param.update":
+        channel = payload.get("channel", "")
+        if not channel:
+            return {
+                "type": "error",
+                "id": "evt-err",
+                "timestamp": now,
+                "payload": {"message": "param.update requires 'channel' in payload"},
+            }
+        if "value" not in payload:
+            return {
+                "type": "error",
+                "id": "evt-err",
+                "timestamp": now,
+                "payload": {"message": "param.update requires 'value' in payload"},
+            }
+        result = await bridge.update_param(channel, payload["value"], payload.get("key"))
+        return {
+            "type": "param.update_result",
+            "id": "evt-param",
+            "timestamp": now,
+            "payload": result,
+        }
+
     if cmd_type == "message.inspect":
         message_id = payload.get("message_id", "")
         detail = bridge.get_message_detail(message_id)

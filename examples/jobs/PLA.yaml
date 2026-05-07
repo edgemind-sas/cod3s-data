@@ -1,0 +1,11 @@
+# Consignes pour un job PLA (filament standard).
+# Chargé par ParamFileSource au démarrage du pipeline ; chaque feuille devient
+# un message sur le channel params.<chemin>.
+
+alarm:
+  extruder:
+    setpoint: 210.0  # °C
+    tolerance: 5.0
+  bed:
+    setpoint: 60.0   # °C
+    tolerance: 3.0

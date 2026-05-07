@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from cod3s_data.broker.base import Broker, SubscriptionHandle
 from cod3s_data.core.buffers import DestinationBuffer, OverflowStrategy
 from cod3s_data.core.message import Message
+
+if TYPE_CHECKING:
+    from cod3s_data.transformations.param_store import ParameterStore
 
 _logger = structlog.get_logger()
 
@@ -49,6 +52,7 @@ class Destination(ABC):
         self._writer_task: asyncio.Task[None] | None = None
         self._message_count = 0
         self._error_count = 0
+        self._param_stores: list[ParameterStore] = []
 
         # Observatory bridge (set by Framework when observatory is active)
         self._bridge: Any = None
@@ -57,6 +61,8 @@ class Destination(ABC):
 
     async def start(self) -> None:
         self._running = True
+        for store in self._param_stores:
+            await store.start()
         self._subscription_handle = self.broker.subscribe(
             self.channel_pattern, self._enqueue_message
         )
@@ -71,6 +77,8 @@ class Destination(ABC):
             await self._writer_task
         await self._flush_buffer()
         await self.close()
+        for store in self._param_stores:
+            await store.stop()
         await self._notify_state_change("running", "stopped")
 
     async def _enqueue_message(self, message: Message) -> None:

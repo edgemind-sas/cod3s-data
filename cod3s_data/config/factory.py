@@ -4,7 +4,13 @@ from collections.abc import Callable
 from typing import Any
 
 from cod3s_data.broker.base import Broker
-from cod3s_data.config.models import DestinationConfig, SourceConfig, TransformConfig
+from cod3s_data.config.models import (
+    DestinationConfig,
+    ParamRef,
+    SourceConfig,
+    TransformConfig,
+    is_param_ref,
+)
 from cod3s_data.destinations.base import Destination
 from cod3s_data.destinations.collect import CollectDestination
 from cod3s_data.destinations.core import ConsoleDestination, FileDestination, InMemoryDestination
@@ -16,6 +22,7 @@ from cod3s_data.sources.file_sources import (
     DirectoryWatchSource,
     FileSource,
 )
+from cod3s_data.sources.param_file import ParamFileSource
 from cod3s_data.sources.test_sources import RandomSource, SequenceSource
 from cod3s_data.transformations.base import Transformation
 from cod3s_data.transformations.builtin import (
@@ -30,6 +37,7 @@ from cod3s_data.transformations.builtin import (
     ThrottleTransform,
     UnpackTransform,
 )
+from cod3s_data.transformations.param_store import ParameterStore
 
 
 class ComponentFactory:
@@ -44,6 +52,7 @@ class ComponentFactory:
             "csv": CSVSource,
             "csv_watch": CSVWatchSource,
             "directory_watch": DirectoryWatchSource,
+            "param_file": ParamFileSource,
         }
         self._transform_registry: dict[str, Callable[..., Transformation]] = {
             "filter": self._create_filter_transform,
@@ -65,6 +74,56 @@ class ComponentFactory:
             "influxdb": InfluxDBDestination,
         }
 
+    def _resolve_param_refs(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Split a params dict into (concrete_params, param_specs).
+
+        Walks the dict; any value matching the ``ParamRef`` shape is replaced
+        by its ``default`` and recorded as a spec. Specs are turned into
+        ``ParameterStore`` instances by ``_attach_param_stores`` once the
+        owning component exists.
+
+        Nested dicts/lists are not traversed: a ParamRef must appear at the
+        top level of ``params`` (matching how component constructors receive
+        their kwargs).
+        """
+        cleaned: dict[str, Any] = {}
+        specs: list[dict[str, Any]] = []
+        for name, value in params.items():
+            if is_param_ref(value):
+                ref = ParamRef.model_validate(value)
+                cleaned[name] = ref.default
+                specs.append(
+                    {
+                        "name": name,
+                        "ref": ref.ref,
+                        "default": ref.default,
+                        "key": ref.key,
+                    }
+                )
+            else:
+                cleaned[name] = value
+        return cleaned, specs
+
+    def _attach_param_stores(self, owner: Any, specs: list[dict[str, Any]]) -> None:
+        """Build ParameterStore instances for each spec and attach to owner."""
+        if not specs:
+            return
+        stores: list[ParameterStore] = getattr(owner, "_param_stores", None) or []
+        for spec in specs:
+            stores.append(
+                ParameterStore(
+                    broker=self.broker,
+                    owner=owner,
+                    param_name=spec["name"],
+                    ref=spec["ref"],
+                    default=spec["default"],
+                    dict_key=spec["key"],
+                )
+            )
+        owner._param_stores = stores
+
     def create_source(self, config: SourceConfig) -> Source:
         """Create source from configuration.
 
@@ -81,7 +140,10 @@ class ComponentFactory:
             raise ValueError(f"Unknown source type: {config.type}")
 
         source_class = self._source_registry[config.type]
-        return source_class(self.broker, config.channel, **config.params)
+        cleaned, specs = self._resolve_param_refs(config.params)
+        source = source_class(self.broker, config.channel, **cleaned)
+        self._attach_param_stores(source, specs)
+        return source
 
     def create_transformation(self, config: TransformConfig) -> Transformation:
         """Create transformation from configuration.
@@ -99,9 +161,12 @@ class ComponentFactory:
             raise ValueError(f"Unknown transformation type: {config.type}")
 
         transform_fn = self._transform_registry[config.type]
-        return transform_fn(
-            self.broker, config.input_channels, config.output_channel, **config.params
+        cleaned, specs = self._resolve_param_refs(config.params)
+        transform = transform_fn(
+            self.broker, config.input_channels, config.output_channel, **cleaned
         )
+        self._attach_param_stores(transform, specs)
+        return transform
 
     def create_destination(self, config: DestinationConfig) -> Destination:
         """Create destination from configuration.
@@ -119,7 +184,10 @@ class ComponentFactory:
             raise ValueError(f"Unknown destination type: {config.type}")
 
         dest_class = self._destination_registry[config.type]
-        return dest_class(self.broker, config.channel_pattern, **config.params)
+        cleaned, specs = self._resolve_param_refs(config.params)
+        destination = dest_class(self.broker, config.channel_pattern, **cleaned)
+        self._attach_param_stores(destination, specs)
+        return destination
 
     @property
     def registered_source_types(self) -> set[str]:

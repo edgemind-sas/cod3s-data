@@ -1,0 +1,90 @@
+# 3D Printing — alarmes avec consignes dynamiques
+#
+# Démontre le mécanisme ParamRef : le setpoint et la tolérance ne sont pas
+# figés dans la config, ils proviennent d'un channel du broker. Au lancement,
+# `param_file` charge `examples/jobs/PLA.yaml` et publie les valeurs sur
+# `params.alarm.*`. En cours d'exécution, l'opérateur (Observatory UI ou
+# `POST /api/params/params.alarm.extruder.setpoint`) republie sur le même
+# channel pour ajuster les consignes.
+#
+# Lancement :
+#   uv run cod3s-data run examples/print_job_dynamic.yaml --observatory
+#
+# Modification runtime :
+#   curl -X POST http://localhost:8765/api/params/params.alarm.extruder.setpoint \
+#        -H "Content-Type: application/json" -d '{"value": 215}'
+
+name: print_job_dynamic
+display_name: "Impression 3D — alarmes dynamiques"
+subtitle: "Consignes définies au lancement, ajustables en cours d'impression"
+
+broker:
+  enable_metrics: true
+  history_size: 1000
+
+sources:
+  # Charge les consignes du job au démarrage du pipeline.
+  # Les valeurs sont publiées sur params.alarm.extruder.setpoint, etc.
+  - type: param_file
+    label: "Consignes du job"
+    channel: params
+    params:
+      path: examples/jobs/PLA.yaml
+      flatten: true
+
+  # Capteurs simulés
+  - type: random
+    label: "Capteur extrudeur"
+    channel: sensors.temperature.extruder
+    params:
+      rate: 5.0
+      min_value: 195.0
+      max_value: 225.0
+      max_messages: 200
+
+  - type: random
+    label: "Capteur plateau"
+    channel: sensors.temperature.bed
+    params:
+      rate: 5.0
+      min_value: 55.0
+      max_value: 65.0
+      max_messages: 200
+
+transformations:
+  # Alarme sur l'extrudeur — setpoint et tolérance dynamiques
+  - type: relative_alarm
+    label: "Alarme extrudeur"
+    input_channels: sensors.temperature.extruder
+    output_channel: alarms.temperature.extruder
+    params:
+      setpoint:
+        ref: params.alarm.extruder.setpoint
+        default: 200.0
+      tolerance_abs:
+        ref: params.alarm.extruder.tolerance
+        default: 5.0
+
+  # Alarme sur le plateau — même pattern
+  - type: relative_alarm
+    label: "Alarme plateau"
+    input_channels: sensors.temperature.bed
+    output_channel: alarms.temperature.bed
+    params:
+      setpoint:
+        ref: params.alarm.bed.setpoint
+        default: 60.0
+      tolerance_abs:
+        ref: params.alarm.bed.tolerance
+        default: 3.0
+
+destinations:
+  - type: console
+    label: "Log alarmes"
+    channel_pattern: alarms.**
+    params: {}
+
+  - type: console
+    label: "Log paramètres"
+    channel_pattern: params.**
+    params: {}

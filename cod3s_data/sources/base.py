@@ -6,12 +6,15 @@ import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import structlog
 
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
 from cod3s_data.core.message import Message
+
+if TYPE_CHECKING:
+    from cod3s_data.transformations.param_store import ParameterStore
 
 _logger = structlog.get_logger()
 
@@ -61,6 +64,7 @@ class Source(ABC):
         self._running = False
         self._paused = False
         self._message_count = 0
+        self._param_stores: list[ParameterStore] = []
 
         # Observatory bridge (set by Framework when observatory is active)
         self._bridge: Any = None
@@ -74,6 +78,8 @@ class Source(ABC):
         Calls produce() and publishes each message to broker.
         """
         self._running = True
+        for store in self._param_stores:
+            await store.start()
         await self._notify_state_change("idle", "running")
 
         try:
@@ -103,6 +109,8 @@ class Source(ABC):
     async def stop(self) -> None:
         """Stop producing messages."""
         self._running = False
+        for store in self._param_stores:
+            await store.stop()
         await self._notify_state_change("running", "stopped")
         await self._on_stop()
 

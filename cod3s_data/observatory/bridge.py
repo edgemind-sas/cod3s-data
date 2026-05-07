@@ -376,6 +376,95 @@ class ObservatoryBridge:
         except Exception as e:
             logger.debug("Observatory hook error", hook="on_metric_emitted", error=str(e))
 
+    async def on_param_updated(
+        self,
+        component_id: str,
+        param_name: str,
+        old_value: Any,
+        new_value: Any,
+        *,
+        channel: str = "",
+    ) -> None:
+        """Called when a ParameterStore rebinds a component attribute."""
+        try:
+            event = ObservatoryEvent(
+                type=EventType.COMPONENT_STATE,
+                data={
+                    "component_id": component_id,
+                    "param_name": param_name,
+                    "channel": channel,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "label": self._resolve_label(component_id),
+                },
+            )
+            self._buffer.push(event)
+            await self._ws.broadcast_event("param.updated", event.data)
+        except Exception as e:
+            logger.debug("Observatory hook error", hook="on_param_updated", error=str(e))
+
+    async def update_param(self, channel: str, value: Any, key: str | None = None) -> dict[str, Any]:
+        """Publish a parameter update on the broker.
+
+        Same effect as any external publisher pushing on ``channel``: the
+        ``ParameterStore`` subscribed to that channel rebinds its component
+        attribute. ``key``, when supplied, wraps ``value`` in a single-key
+        dict so consumers using ``ParamRef.key`` can extract their slice.
+        """
+        from datetime import datetime, timezone
+
+        from cod3s_data.core.message import Message
+
+        if self._framework is None:
+            return {"status": "error", "message": "No framework connected"}
+
+        broker = self._framework.broker
+        payload = {key: value} if key else value
+        message = Message(
+            key=channel,
+            timestamp=datetime.now(timezone.utc),
+            value=payload,
+            tags={},
+        )
+        try:
+            result = await broker.publish(channel, message)
+            return {
+                "status": "ok",
+                "channel": channel,
+                "subscriber_count": result.subscriber_count,
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def get_editable_params(self) -> list[dict[str, Any]]:
+        """Snapshot of all parameters declared via ``ParamRef``.
+
+        The factory attaches ``_param_stores`` to each component when it
+        resolves a ``ParamRef``. We surface those so the Observatory UI can
+        render an editor without inventing a new registration mechanism.
+        """
+        if self._framework is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for comp in (
+            list(self._framework.sources)
+            + list(self._framework.transformations)
+            + list(self._framework.destinations)
+        ):
+            for store in getattr(comp, "_param_stores", []):
+                out.append(
+                    {
+                        "component_id": getattr(comp, "_component_id", ""),
+                        "component_label": getattr(comp, "_label", ""),
+                        "param_name": store.param_name,
+                        "channel": store.ref,
+                        "key": store.dict_key,
+                        "default": store.default,
+                        "current": store.current,
+                    }
+                )
+        return out
+
     async def on_error(
         self,
         component_id: str,

@@ -4,7 +4,44 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ParamRef(BaseModel):
+    """Reference to a broker channel that supplies a parameter value.
+
+    A component param declared as a ``ParamRef`` is hydrated from messages
+    published on ``ref``. The factory replaces the ref with ``default`` at
+    construction time and wires a ``ParameterStore`` that rebinds the
+    attribute on every new message. This is the mechanism behind "variable"
+    pipeline parameters (setpoints, tolerances, etc.) editable at runtime.
+
+    YAML example::
+
+        params:
+          setpoint:
+            ref: params.alarm.extruder
+            default: 200.0
+          # extract value['extruder'] from messages on the ref channel
+          tolerance:
+            ref: params.alarm
+            key: extruder_tolerance
+            default: 5.0
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str = Field(..., description="Broker channel publishing this parameter's value")
+    default: Any = Field(default=None, description="Value used until the first message arrives")
+    key: str | None = Field(
+        default=None,
+        description="If the channel publishes dict-valued messages, extract this key",
+    )
+
+
+def is_param_ref(value: Any) -> bool:
+    """Return True if ``value`` looks like a ``ParamRef`` payload (dict with 'ref' key)."""
+    return isinstance(value, dict) and "ref" in value and isinstance(value["ref"], str)
 
 
 class SourceConfig(BaseModel):

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from cod3s_data.observatory.routes import channels, debug, health, topology, ws
+from cod3s_data.observatory.routes import channels, debug, health, params, topology, ws
 
 if TYPE_CHECKING:
     from cod3s_data.observatory.bridge import ObservatoryBridge
@@ -48,6 +48,7 @@ def create_app(
     app.include_router(health.router, prefix="/api")
     app.include_router(topology.router, prefix="/api")
     app.include_router(channels.router, prefix="/api")
+    app.include_router(params.router, prefix="/api")
     app.include_router(debug.router, prefix="/api/debug")
 
     # Mount WebSocket
