@@ -29,7 +29,7 @@ sources:
     label: "Consignes du job"
     channel: params
     params:
-      path: examples/jobs/PLA.yaml
+      file_path: examples/jobs/PLA.yaml
       flatten: true
 
   # Capteurs simulés

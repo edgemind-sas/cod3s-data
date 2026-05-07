@@ -21,6 +21,7 @@ export type EventType =
   | 'debug.resumed'
   | 'debug.step_result'
   | 'error.occurred'
+  | 'param.updated'
 
 /** Channel info for a topology node */
 export interface ChannelInfo {
@@ -123,3 +124,24 @@ export interface MessageDetail {
 }
 
 export type InspectorTab = 'SUMMARY' | 'VALUE' | 'TAGS' | 'JOURNEY' | 'RAW'
+
+/** Pipeline parameter declared via ParamRef */
+export interface Param {
+  component_id: string
+  component_label: string
+  param_name: string
+  channel: string
+  key: string | null
+  default: unknown
+  current: unknown
+}
+
+/** WebSocket payload for param.updated events */
+export interface ParamUpdatedEvent {
+  component_id: string
+  param_name: string
+  channel: string
+  old_value: unknown
+  new_value: unknown
+  label: string
+}

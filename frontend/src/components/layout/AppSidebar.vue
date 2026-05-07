@@ -43,6 +43,7 @@ const navItems = [
   { path: '/topology', title: 'Topology', icon: 'mdi-graph' },
   { path: '/timeline', title: 'Timeline', icon: 'mdi-timeline' },
   { path: '/messages', title: 'Messages', icon: 'mdi-email-search-outline' },
+  { path: '/parameters', title: 'Parameters', icon: 'mdi-tune' },
   // { path: '/metrics', title: 'Metrics', icon: 'mdi-chart-line' },
   // { path: '/debug', title: 'Debug', icon: 'mdi-bug' },
 ]

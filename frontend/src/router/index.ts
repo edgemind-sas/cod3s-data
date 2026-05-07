@@ -24,6 +24,12 @@ const routes = [
     meta: { title: 'Message Inspector', icon: 'mdi-email-search-outline' },
   },
   {
+    path: '/parameters',
+    name: 'Parameters',
+    component: () => import('@/views/ParametersView.vue'),
+    meta: { title: 'Pipeline Parameters', icon: 'mdi-tune' },
+  },
+  {
     path: '/metrics',
     name: 'Metrics',
     component: () => import('@/views/MetricsView.vue'),
