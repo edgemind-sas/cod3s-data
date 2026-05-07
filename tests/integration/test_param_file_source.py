@@ -41,9 +41,9 @@ class TestParamFileSource:
         await asyncio.sleep(0.05)
 
         assert received == {
-            "alarm.extruder.setpoint": 215,
-            "alarm.extruder.tolerance": 5,
-            "alarm.bed.setpoint": 60,
+            "params.alarm.extruder.setpoint": 215,
+            "params.alarm.extruder.tolerance": 5,
+            "params.alarm.bed.setpoint": 60,
         }
         await broker.stop()
 
@@ -65,7 +65,7 @@ class TestParamFileSource:
         await source.start()
         await asyncio.sleep(0.05)
 
-        assert received == {"foo.bar": 42}
+        assert received == {"params.foo.bar": 42}
         await broker.stop()
 
     async def test_published_values_replay_to_late_subscribers(self, tmp_path: Path):

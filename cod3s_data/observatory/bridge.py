@@ -21,6 +21,24 @@ logger = structlog.get_logger()
 _TRACE_ID_CACHE_SIZE = 2000
 
 
+def _coerce_ints_to_floats(value: Any) -> Any:
+    """Convert plain ints to floats, recursing into dicts/lists.
+
+    Booleans are preserved (they're a subclass of int but represent a
+    distinct domain). Used by ``update_param`` to keep numeric param
+    values type-stable across publishes — see the docstring there.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return float(value)
+    if isinstance(value, dict):
+        return {k: _coerce_ints_to_floats(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_ints_to_floats(v) for v in value]
+    return value
+
+
 class ObservatoryBridge:
     """Sole point of contact between the COD3S framework and the Observatory.
 
@@ -410,6 +428,13 @@ class ObservatoryBridge:
         ``ParameterStore`` subscribed to that channel rebinds its component
         attribute. ``key``, when supplied, wraps ``value`` in a single-key
         dict so consumers using ``ParamRef.key`` can extract their slice.
+
+        Plain ints in the payload are coerced to floats. Without this,
+        downstream type-strict sinks (notably InfluxDB, which freezes the
+        field type on the first write) silently reject updates when the
+        initial YAML default was a float (``10.0``) and a later operator
+        edit comes in as an int (``50``). All numeric setpoints/tolerances
+        are floats by convention, so the coercion is harmless.
         """
         from datetime import datetime, timezone
 
@@ -420,6 +445,7 @@ class ObservatoryBridge:
 
         broker = self._framework.broker
         payload = {key: value} if key else value
+        payload = _coerce_ints_to_floats(payload)
         message = Message(
             key=channel,
             timestamp=datetime.now(timezone.utc),

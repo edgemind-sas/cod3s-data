@@ -66,9 +66,20 @@ class ParamFileSource(Source):
         ``message.key`` is the flattened parameter path (e.g.
         ``alarm.extruder.setpoint``). The base class would publish all
         messages on a single channel — here we route per-key.
+
+        We also rewrite ``message.key`` to the full target channel so the
+        downstream measurement name is consistent whether the value comes
+        from this source or from ``ObservatoryBridge.update_param`` (which
+        already uses the channel as the message key).
         """
         target = f"{self.channel}.{message.key}" if message.key else self.channel
-        await self.broker.publish(target, message, self.delivery_guarantee)
+        consistent = Message(
+            key=target,
+            timestamp=message.timestamp,
+            value=message.value,
+            tags=message.tags,
+        )
+        await self.broker.publish(target, consistent, self.delivery_guarantee)
 
     def _load(self) -> Any:
         text = self.file_path.read_text()
