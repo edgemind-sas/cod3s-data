@@ -51,7 +51,7 @@ uv pip install "cod3s-data[observatory]"
 ```
 
 Adds FastAPI, uvicorn and websockets, and enables the Observatory UI served at
-<http://localhost:8765>.
+<http://localhost:8765>. See [Observatory](observatory.md).
 
 ### InfluxDB Destination
 

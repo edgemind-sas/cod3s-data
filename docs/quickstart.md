@@ -355,8 +355,9 @@ Options:
 
 ## Next Steps
 
-- Explore [Example Pipelines](../examples/)
+- Explore [Example Pipelines](../examples/README.md)
 - Read the [API Reference](api-reference.md)
+- Watch a pipeline run with the [Observatory](observatory.md)
 - Write your own components with the [plugin system](api-reference.md#writing-a-plugin)
 
 ## Getting Help

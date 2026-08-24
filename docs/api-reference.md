@@ -819,6 +819,81 @@ from cod3s_data.config.loaders import load_yaml
 config = load_yaml("pipeline.yaml")
 ```
 
+### Pipeline display metadata
+
+Fields that exist only to make a pipeline legible in the
+[Observatory](observatory.md) UI. They never affect routing or behaviour.
+
+```yaml
+name: extruder_monitoring          # identifier, used in logs and metrics
+display_name: Extruder monitoring  # title shown in the Observatory header
+subtitle: Line 3, PLA job          # second line under the title
+
+sources:
+  - type: csv
+    label: Telemetry file          # node name in the topology graph
+    description: >                 # shown when hovering the node
+      Reads the printer's telemetry export, one row per second.
+    channel: sensors.raw
+    params:
+      file_path: telemetry.csv
+```
+
+- `display_name: str | None` and `subtitle: str | None` on the pipeline
+- `label: str | None` and `description: str | None` on every source,
+  transformation and destination
+
+All four default to empty. Without a `label`, a component shows as its
+component id (`src-0`, `tfm-1`, `dst-0`).
+
+### Observatory configuration
+
+The optional `observatory:` section configures the web UI. It is only read when
+the Observatory is enabled, and is documented in full in
+[Observatory → Configuration](observatory.md#configuration).
+
+```yaml
+observatory:
+  port: 8765
+  debug:
+    enabled: true
+  sampling:
+    strategy: every_nth
+    rate: 10
+```
+
+### Environment variables
+
+`load_yaml()` and `load_dict()` apply these overrides after reading the file and
+before validation. An unset variable changes nothing.
+
+| Variable | Overrides | Type |
+|---|---|---|
+| `COD3S_PIPELINE_NAME` | `name` | str |
+| `COD3S_BROKER_ENABLE_METRICS` | `broker.enable_metrics` | bool |
+| `COD3S_BROKER_HISTORY_SIZE` | `broker.history_size` | int |
+| `COD3S_OBSERVATORY_ENABLED` | `observatory.enabled` | bool |
+| `COD3S_OBSERVATORY_HOST` | `observatory.host` | str |
+| `COD3S_OBSERVATORY_PORT` | `observatory.port` | int |
+| `COD3S_OBSERVATORY_BUFFER_SIZE` | `observatory.buffer_size` | int |
+| `COD3S_OBSERVATORY_MEMORY_LIMIT_MB` | `observatory.memory_limit_mb` | int |
+| `COD3S_OBSERVATORY_DEBUG` | `observatory.debug.enabled` | bool |
+| `COD3S_OBSERVATORY_DEBUG_GRANULARITY` | `observatory.debug.granularity` | str |
+| `COD3S_OBSERVATORY_DEBUG_AUTO_PAUSE` | `observatory.debug.auto_pause` | bool |
+| `COD3S_OBSERVATORY_SAMPLING_STRATEGY` | `observatory.sampling.strategy` | str |
+| `COD3S_OBSERVATORY_SAMPLING_RATE` | `observatory.sampling.rate` | int |
+| `COD3S_OBSERVATORY_SAMPLING_INTERVAL_MS` | `observatory.sampling.interval_ms` | int |
+
+Booleans read as true for `true`, `1` or `yes`, case-insensitive; anything else
+is false. A value that cannot be parsed as its declared type raises at load
+time — except `COD3S_BROKER_HISTORY_SIZE`, which is silently ignored when
+unparsable.
+
+```bash
+COD3S_PIPELINE_NAME=staging COD3S_BROKER_HISTORY_SIZE=5000 \
+  cod3s-data run pipeline.yaml
+```
+
 ### Dynamic parameters (ParamRef)
 
 Any component parameter can be sourced from a broker channel instead of being

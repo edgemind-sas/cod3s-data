@@ -153,9 +153,11 @@ inspector with per-message journey, metrics, and a Parameters page that edits
 
 ```bash
 pip install -e ".[observatory]"
+cod3s-data run pipeline.yaml --observatory
 ```
 
-Enable it on a pipeline and open <http://localhost:8765>.
+Then open <http://localhost:8765>. Full reference, including the REST and
+WebSocket APIs: [docs/observatory.md](docs/observatory.md).
 
 ## Development
 
@@ -242,11 +244,12 @@ and the absence of regressions, not an absolute figure.
 
 ## Documentation
 
-See the [docs/](docs/) directory for:
-- Installation guide
-- API reference
-- Configuration examples
-- Performance tuning
+- [Installation](docs/installation.md) — install, extras, Docker, troubleshooting
+- [Quickstart](docs/quickstart.md) — first pipeline, plugins, common patterns
+- [API reference](docs/api-reference.md) — every component, configuration, and channel semantics
+- [Observatory](docs/observatory.md) — the web UI, its configuration, REST and WebSocket APIs
+- [Examples](examples/README.md) — seven runnable pipelines
+- [Specifications](docs/specifications/) — the original design documents (frozen; see the API reference for current behaviour)
 
 ## License
 
