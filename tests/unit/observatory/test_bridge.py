@@ -663,3 +663,52 @@ class TestMessageInspectorHooks:
         assert journey[6]["stage"] == "DELIVERED"
         assert journey[6]["component_id"] == "dst-1"
         assert journey[6]["channel"] == "alerts.high_temp"
+
+
+class TestParamEventsDoNotCorruptTopology:
+    """A ParamRef rebind must not erase the component's node.
+
+    on_param_updated used to push its event as EventType.COMPONENT_STATE, but
+    its payload has no component_type or new_state. /api/topology keeps the
+    latest COMPONENT_STATE event per component id, so every component holding a
+    ParamRef came back as unknown/unknown.
+    """
+
+    async def test_param_update_is_not_a_component_state_event(self):
+        buffer = EventBuffer(max_size=100)
+        bridge = _make_bridge(buffer=buffer)
+
+        await bridge.on_component_state_change("tfm-0", "transformation", "created", "running")
+        await bridge.on_param_updated(
+            "tfm-0", "setpoint", 200.0, 215.0, channel="params.extruder.setpoint"
+        )
+
+        states = buffer.get_recent(50, EventType.COMPONENT_STATE)
+        assert len(states) == 1
+        assert states[0]["data"]["component_type"] == "transformation"
+        assert states[0]["data"]["new_state"] == "running"
+
+        params = buffer.get_recent(50, EventType.PARAM)
+        assert len(params) == 1
+        assert params[0]["data"]["param_name"] == "setpoint"
+        assert params[0]["data"]["new_value"] == 215.0
+
+    async def test_topology_route_keeps_the_component_after_a_param_update(self):
+        """Exercise the route function directly: TestClient would need httpx."""
+        from types import SimpleNamespace
+
+        from cod3s_data.observatory.routes.topology import get_component, get_topology
+
+        buffer = EventBuffer(max_size=100)
+        bridge = _make_bridge(buffer=buffer)
+
+        await bridge.on_component_state_change("tfm-0", "transformation", "created", "running")
+        await bridge.on_param_updated("tfm-0", "setpoint", 200.0, 215.0)
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(buffer=buffer)))
+
+        topology = await get_topology(request)
+        assert topology["nodes"] == [{"id": "tfm-0", "type": "transformation", "state": "running"}]
+
+        detail = await get_component("tfm-0", request)
+        assert detail == {"id": "tfm-0", "type": "transformation", "state": "running"}

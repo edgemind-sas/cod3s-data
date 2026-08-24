@@ -19,6 +19,7 @@ class EventType(Enum):
     METRIC = "metric"
     ERROR = "error"
     DEBUG = "debug"
+    PARAM = "param"
 
 
 @dataclass
@@ -100,6 +101,7 @@ class EventBuffer:
             "metrics": self.get_recent(50, EventType.METRIC),
             "errors": self.get_recent(20, EventType.ERROR),
             "debug_events": self.get_recent(50, EventType.DEBUG),
+            "params": self.get_recent(50, EventType.PARAM),
         }
 
     def clear(self) -> None:

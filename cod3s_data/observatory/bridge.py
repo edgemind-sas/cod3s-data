@@ -403,10 +403,16 @@ class ObservatoryBridge:
         *,
         channel: str = "",
     ) -> None:
-        """Called when a ParameterStore rebinds a component attribute."""
+        """Called when a ParameterStore rebinds a component attribute.
+
+        Emitted as EventType.PARAM, not COMPONENT_STATE: this payload carries no
+        component_type or new_state, and /api/topology keeps only the latest
+        event per component id, so filing it under COMPONENT_STATE erased the
+        node of every component holding a ParamRef.
+        """
         try:
             event = ObservatoryEvent(
-                type=EventType.COMPONENT_STATE,
+                type=EventType.PARAM,
                 data={
                     "component_id": component_id,
                     "param_name": param_name,
