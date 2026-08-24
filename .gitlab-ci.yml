@@ -125,12 +125,63 @@ test:
   rules: !reference [.ci-rules, rules]
 
 # ----------------------------------------------------------------------------
+# Stage : test — le wheel contient-il l'interface ?
+#
+# Le paquet a longtemps été construit sans son interface : setuptools ne prend
+# que les .py tant qu'on ne déclare pas `package-data`, et rien ne le signalait —
+# `create_app()` ne monte le répertoire statique que s'il existe, donc un paquet
+# installé servait une API fonctionnelle et un 404 sur chaque page.
+#
+# Ce job reconstruit le wheel et vérifie qu'il embarque bien l'UI. C'est le seul
+# contrôle qui exerce réellement `package-data` : ni les tests ni une install
+# editable ne passent par là.
+# ----------------------------------------------------------------------------
+package:
+  extends: .python-job
+  stage: test
+  script:
+    - uv build --wheel --out-dir dist-wheel
+    - |
+      uv run python - <<'EOF'
+      import glob, sys, zipfile
+      wheels = glob.glob("dist-wheel/*.whl")
+      assert len(wheels) == 1, f"attendu 1 wheel, trouvé {wheels}"
+      names = zipfile.ZipFile(wheels[0]).namelist()
+      ui = [n for n in names if "/observatory/static/" in n]
+      index = "cod3s_data/observatory/static/index.html"
+      print(f"{len(names)} fichiers dans le wheel, dont {len(ui)} pour l'interface")
+      if index not in names:
+          sys.exit(
+              f"{index} absent du wheel.\n"
+              "Vérifier [tool.setuptools.package-data] dans pyproject.toml et "
+              "que cod3s_data/observatory/static/ est bien versionné."
+          )
+      EOF
+  artifacts:
+    paths:
+      - dist-wheel/
+    expire_in: 1 week
+  rules: !reference [.ci-rules, rules]
+
+# ----------------------------------------------------------------------------
 # Stage : test — build du frontend Observatory
 #
-# `npm run build` enchaîne `vue-tsc --noEmit` et `vite build` : c'est le seul
-# endroit où le TypeScript de l'UI est vérifié, `npm run deploy` se contentant
-# de transpiler. Le job ne publie pas dist/ — les assets servis par le paquet
-# sont produits par `npm run deploy` au moment de la release, pas ici.
+# Deux contrôles en un job, parce qu'ils portent sur la même construction.
+#
+# 1. `npm run build` enchaîne `vue-tsc --noEmit` et `vite build` : c'est le seul
+#    endroit où le TypeScript de l'UI est vérifié, `npm run deploy` se contentant
+#    de transpiler.
+#
+# 2. L'artefact construit est versionné dans cod3s_data/observatory/static/,
+#    parce que c'est lui qui part dans le wheel. Un artefact versionné se périme
+#    dès qu'on touche aux sources sans relancer `npm run deploy` — le job le
+#    reconstruit donc et échoue si le résultat diffère de ce qui est commité.
+#
+#    En cas d'échec sur ce diff : lancer `npm run deploy --prefix frontend` et
+#    commiter le résultat. Si le diff ne porte que sur des noms de fichiers
+#    hachés alors que les sources n'ont pas bougé, c'est que la chaîne d'outils
+#    a changé (version de Node, de vite) et non le code — auquel cas c'est le
+#    lockfile ou l'image qu'il faut aligner, pas l'artefact qu'il faut forcer.
 # ----------------------------------------------------------------------------
 frontend:
   stage: test
@@ -141,7 +192,19 @@ frontend:
         - frontend/package-lock.json
     paths:
       - frontend/node_modules/
+  before_script:
+    # `git diff` a besoin de git, absent de l'image slim.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git
   script:
     - npm ci --prefix frontend --no-audit --no-fund
     - npm run build --prefix frontend
+    - npm run deploy --prefix frontend
+    - |
+      if ! git diff --quiet -- cod3s_data/observatory/static/; then
+        echo "L'artefact commité ne correspond plus aux sources du frontend."
+        echo "Lancer : npm run deploy --prefix frontend, puis commiter."
+        git diff --stat -- cod3s_data/observatory/static/
+        exit 1
+      fi
+    - git status --porcelain -- cod3s_data/observatory/static/
   rules: !reference [.ci-rules, rules]

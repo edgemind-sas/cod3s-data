@@ -36,6 +36,8 @@ cd frontend && npm run dev           # dev server, proxies /api and /ws to :8765
 cd frontend && npm run build         # vue-tsc typecheck + vite build
 cd frontend && npm run deploy        # build + copy into cod3s_data/observatory/static/
                                      # NOTE: deploy skips the typecheck — build first
+                                     # static/ is VERSIONED (it ships in the wheel):
+                                     # deploy and commit it with any frontend change
 ```
 
 ## Architecture
@@ -113,8 +115,7 @@ useful habit is to instantiate a pipeline through the real `ComponentFactory`
 rather than trusting that a config validates.
 
 Read `BACKLOG.md` before assuming something is missing by accident — it indexes
-the issue tracker, where the known gaps are recorded, including the wheel not
-shipping the Observatory UI (#1).
+the issue tracker, where the known gaps are recorded.
 
 `docs/architecture.md` records why the framework is shaped this way, and the
-four places the code has diverged from its own design decisions.
+three places the code still diverges from its own design decisions.
