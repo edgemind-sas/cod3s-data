@@ -1,6 +1,5 @@
 """Tests for Observatory EventBuffer."""
 
-
 from cod3s_data.observatory.buffer import EventBuffer, EventType, ObservatoryEvent
 
 

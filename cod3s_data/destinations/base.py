@@ -86,9 +86,7 @@ class Destination(ABC):
     async def _enqueue_message(self, message: Message) -> None:
         if self._bridge is not None:
             with contextlib.suppress(Exception):
-                await self._bridge.on_message_received(
-                    self._component_id, "destination", message
-                )
+                await self._bridge.on_message_received(self._component_id, "destination", message)
         await self.buffer.put(message)
 
     async def _writer_loop(self) -> None:
@@ -154,8 +152,7 @@ class Destination(ABC):
             return 1.0
 
     @abstractmethod
-    async def write(self, message: Message) -> None:
-        ...
+    async def write(self, message: Message) -> None: ...
 
     async def _notify_state_change(self, old_state: str, new_state: str) -> None:
         """Notify Observatory bridge of state change."""

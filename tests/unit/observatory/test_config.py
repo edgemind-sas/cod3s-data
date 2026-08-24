@@ -134,12 +134,14 @@ class TestObservatoryConfig:
         assert config.sampling.rate == 10
 
     def test_from_dict(self):
-        config = ObservatoryConfig.model_validate({
-            "enabled": True,
-            "port": 9000,
-            "debug": {"enabled": True, "granularity": "breakpoint"},
-            "sampling": {"strategy": "time_based", "interval_ms": 500},
-        })
+        config = ObservatoryConfig.model_validate(
+            {
+                "enabled": True,
+                "port": 9000,
+                "debug": {"enabled": True, "granularity": "breakpoint"},
+                "sampling": {"strategy": "time_based", "interval_ms": 500},
+            }
+        )
         assert config.port == 9000
         assert config.debug.enabled is True
         assert config.debug.granularity == "breakpoint"

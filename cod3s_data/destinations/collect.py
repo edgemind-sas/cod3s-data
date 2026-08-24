@@ -36,10 +36,14 @@ class CollectDestination(Destination):
         self.messages.clear()
 
     def assert_count(self, expected: int) -> None:
-        assert len(self.messages) == expected, f"Expected {expected} messages, got {len(self.messages)}"
+        assert len(self.messages) == expected, (
+            f"Expected {expected} messages, got {len(self.messages)}"
+        )
 
     def assert_min_count(self, minimum: int) -> None:
-        assert len(self.messages) >= minimum, f"Expected at least {minimum} messages, got {len(self.messages)}"
+        assert len(self.messages) >= minimum, (
+            f"Expected at least {minimum} messages, got {len(self.messages)}"
+        )
 
     def filter_by(self, key: str | None = None, **tags: str) -> list[Message]:
         results = self.messages
@@ -53,5 +57,7 @@ class CollectDestination(Destination):
         start = asyncio.get_event_loop().time()
         while len(self.messages) < count:
             if asyncio.get_event_loop().time() - start > timeout:
-                raise TimeoutError(f"Timeout waiting for {count} messages, got {len(self.messages)}")
+                raise TimeoutError(
+                    f"Timeout waiting for {count} messages, got {len(self.messages)}"
+                )
             await asyncio.sleep(0.01)

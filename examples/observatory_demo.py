@@ -105,7 +105,9 @@ async def main():
         state_events = [e for e in events if e["type"] == "component_state"]
         for e in state_events:
             d = e["data"]
-            print(f"  {d['component_id']:8s} ({d['component_type']:13s}) {d['old_state']} -> {d['new_state']}")
+            print(
+                f"  {d['component_id']:8s} ({d['component_type']:13s}) {d['old_state']} -> {d['new_state']}"
+            )
 
         await framework.stop()
 

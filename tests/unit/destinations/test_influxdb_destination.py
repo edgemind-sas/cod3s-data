@@ -58,14 +58,17 @@ def _make_destination(
 class TestImportGuard:
     def test_import_error_without_library(self) -> None:
         """ImportError is raised with a helpful message when the library is missing."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "influxdb_client": None,
-                "influxdb_client.client": None,
-                "influxdb_client.client.influxdb_client_async": None,
-            },
-        ), pytest.raises(ImportError, match="influxdb-client"):
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "influxdb_client": None,
+                    "influxdb_client.client": None,
+                    "influxdb_client.client.influxdb_client_async": None,
+                },
+            ),
+            pytest.raises(ImportError, match="influxdb-client"),
+        ):
             broker = InMemoryBroker(enable_metrics=False)
             # Need to reload the module to pick up the patched import
             import importlib

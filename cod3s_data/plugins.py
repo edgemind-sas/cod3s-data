@@ -34,21 +34,15 @@ def load_plugin(module_path: str, factory: ComponentFactory) -> None:
         register_fn = getattr(module, "register_all", None)
 
     if register_fn is None:
-        raise PluginError(
-            f"Plugin '{module_path}' has no 'register' or 'register_all' function"
-        )
+        raise PluginError(f"Plugin '{module_path}' has no 'register' or 'register_all' function")
 
     if not callable(register_fn):
-        raise PluginError(
-            f"Plugin '{module_path}': 'register' is not callable"
-        )
+        raise PluginError(f"Plugin '{module_path}': 'register' is not callable")
 
     try:
         register_fn(factory)
     except Exception as exc:
-        raise PluginError(
-            f"Plugin '{module_path}' register() failed: {exc}"
-        ) from exc
+        raise PluginError(f"Plugin '{module_path}' register() failed: {exc}") from exc
 
 
 def load_plugins(

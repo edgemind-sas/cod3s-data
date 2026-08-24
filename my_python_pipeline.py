@@ -53,9 +53,7 @@ async def main():
         output_channel="stats.avg_temp",
         window_type="count",
         window_size=5,
-        aggregation_fn=lambda msgs: round(
-            sum(m.value for m in msgs) / len(msgs), 2
-        ),
+        aggregation_fn=lambda msgs: round(sum(m.value for m in msgs) / len(msgs), 2),
     )
 
     # 4. Create destinations

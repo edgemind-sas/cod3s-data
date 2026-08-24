@@ -34,10 +34,12 @@ async def get_topology(request: Request) -> dict[str, Any]:
     for event in sub_events:
         data = event["data"]
         if data.get("action") == "subscribe":
-            edges.append({
-                "pattern": data.get("pattern", ""),
-                "subscriber_id": data.get("subscriber_id", ""),
-            })
+            edges.append(
+                {
+                    "pattern": data.get("pattern", ""),
+                    "subscriber_id": data.get("subscriber_id", ""),
+                }
+            )
 
     return {
         "nodes": list(components.values()),

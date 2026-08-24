@@ -21,8 +21,11 @@ class TestParameterStore:
         await broker.start()
         owner = SimpleNamespace(setpoint=None)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.s", default=100.0,
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.s",
+            default=100.0,
         )
         await store.start()
         # No messages yet — owner should hold the constructor default,
@@ -36,8 +39,11 @@ class TestParameterStore:
         await broker.start()
         owner = SimpleNamespace(setpoint=100.0)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.s", default=100.0,
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.s",
+            default=100.0,
         )
         await store.start()
 
@@ -57,8 +63,11 @@ class TestParameterStore:
 
         owner = SimpleNamespace(setpoint=0.0)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.s", default=0.0,
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.s",
+            default=0.0,
         )
         await store.start()
 
@@ -73,8 +82,12 @@ class TestParameterStore:
         await broker.start()
         owner = SimpleNamespace(setpoint=None)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.bundle", default=None, dict_key="extruder",
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.bundle",
+            default=None,
+            dict_key="extruder",
         )
         await store.start()
 
@@ -90,8 +103,11 @@ class TestParameterStore:
         await broker.start()
         owner = SimpleNamespace(setpoint=0)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.s", default=0,
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.s",
+            default=0,
         )
         await store.start()
         await store.stop()
@@ -107,8 +123,12 @@ class TestParameterStore:
         await broker.start()
         owner = SimpleNamespace(setpoint=10)
         store = ParameterStore(
-            broker=broker, owner=owner, param_name="setpoint",
-            ref="params.bundle", default=10, dict_key="nope",
+            broker=broker,
+            owner=owner,
+            param_name="setpoint",
+            ref="params.bundle",
+            default=10,
+            dict_key="nope",
         )
         await store.start()
 

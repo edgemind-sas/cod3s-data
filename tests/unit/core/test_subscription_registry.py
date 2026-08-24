@@ -1,6 +1,5 @@
 """Unit tests for SubscriptionRegistry."""
 
-
 import pytest
 
 from cod3s_data.core.message import Message

@@ -295,7 +295,11 @@ class Framework:
                 await self._start_pipeline()
                 return {"status": "ok", "state": self._pipeline_state.value}
 
-            return {"status": "error", "state": self._pipeline_state.value, "message": f"Unknown command: {command}"}
+            return {
+                "status": "error",
+                "state": self._pipeline_state.value,
+                "message": f"Unknown command: {command}",
+            }
         except Exception as e:
             self._pipeline_state = PipelineState.ERROR
             await self._broadcast_pipeline_state()

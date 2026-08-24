@@ -54,8 +54,14 @@ class FileDestination(Destination):
         append: bool = True,
     ) -> None:
         super().__init__(
-            broker, channel_pattern, buffer_size, overflow_strategy,
-            retry_attempts, retry_strategy, dlq_channel, batch_size
+            broker,
+            channel_pattern,
+            buffer_size,
+            overflow_strategy,
+            retry_attempts,
+            retry_strategy,
+            dlq_channel,
+            batch_size,
         )
         self.file_path = Path(file_path)
         self.format = format
@@ -91,8 +97,13 @@ class InMemoryDestination(Destination):
         dlq_channel: str | None = None,
     ) -> None:
         super().__init__(
-            broker, channel_pattern, buffer_size, overflow_strategy,
-            retry_attempts, retry_strategy, dlq_channel
+            broker,
+            channel_pattern,
+            buffer_size,
+            overflow_strategy,
+            retry_attempts,
+            retry_strategy,
+            dlq_channel,
         )
         self.messages: list[Message] = []
         self._lock = asyncio.Lock()

@@ -177,9 +177,7 @@ class ObservatoryBridge:
         journey = self._journey_store.get_journey(trace_id)
         if not journey:
             return ""
-        published_channels: list[str] = [
-            s["channel"] for s in journey if s["stage"] == "PUBLISHED"
-        ]
+        published_channels: list[str] = [s["channel"] for s in journey if s["stage"] == "PUBLISHED"]
         for channel in published_channels:
             for pattern in patterns:
                 if SubscriptionRegistry.matches(pattern, channel):
@@ -423,7 +421,9 @@ class ObservatoryBridge:
         except Exception as e:
             logger.debug("Observatory hook error", hook="on_param_updated", error=str(e))
 
-    async def update_param(self, channel: str, value: Any, key: str | None = None) -> dict[str, Any]:
+    async def update_param(
+        self, channel: str, value: Any, key: str | None = None
+    ) -> dict[str, Any]:
         """Publish a parameter update on the broker.
 
         Same effect as any external publisher pushing on ``channel``: the
@@ -545,27 +545,21 @@ class ObservatoryBridge:
         """Start the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        result: dict[str, str] = await self._framework.handle_pipeline_command(
-            "start"
-        )
+        result: dict[str, str] = await self._framework.handle_pipeline_command("start")
         return result
 
     async def stop_pipeline(self) -> dict[str, str]:
         """Stop the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        result: dict[str, str] = await self._framework.handle_pipeline_command(
-            "stop"
-        )
+        result: dict[str, str] = await self._framework.handle_pipeline_command("stop")
         return result
 
     async def restart_pipeline(self) -> dict[str, str]:
         """Restart the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        result: dict[str, str] = await self._framework.handle_pipeline_command(
-            "restart"
-        )
+        result: dict[str, str] = await self._framework.handle_pipeline_command("restart")
         return result
 
     def get_pipeline_state(self) -> str:
@@ -694,7 +688,9 @@ class ObservatoryBridge:
             for sub_id, pattern in subscribers:
                 if pub_id == sub_id:
                     continue
-                if SubscriptionRegistry.matches(pattern, channel) or pattern.startswith(channel + "."):
+                if SubscriptionRegistry.matches(pattern, channel) or pattern.startswith(
+                    channel + "."
+                ):
                     edges.append(
                         {
                             "source_id": pub_id,

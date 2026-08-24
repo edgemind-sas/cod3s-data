@@ -16,9 +16,7 @@ from cod3s_data.destinations.base import Destination, RetryStrategy
 _logger = structlog.get_logger()
 
 
-def _flatten_fields(
-    value: dict[str, Any], prefix: str = ""
-) -> list[tuple[str, Any]]:
+def _flatten_fields(value: dict[str, Any], prefix: str = "") -> list[tuple[str, Any]]:
     """Flatten a (possibly nested) dict into [(key, scalar)] pairs.
 
     InfluxDB Point fields accept only scalars (int/float/bool/str). Nested

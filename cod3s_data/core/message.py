@@ -47,9 +47,7 @@ class Message(BaseModel):
         ..., description="When the measurement was taken (must be timezone-aware UTC)"
     )
 
-    value: Any = Field(
-        ..., description="The actual measurement (any JSON-serializable type)"
-    )
+    value: Any = Field(..., description="The actual measurement (any JSON-serializable type)")
 
     # Optional fields
     tags: dict[str, str] = Field(

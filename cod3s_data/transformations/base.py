@@ -29,7 +29,9 @@ class Transformation(ABC):
         output_channel: str,
     ) -> None:
         self.broker = broker
-        self.input_channels = [input_channels] if isinstance(input_channels, str) else input_channels
+        self.input_channels = (
+            [input_channels] if isinstance(input_channels, str) else input_channels
+        )
         self.output_channel = output_channel
         self._running = False
         self._subscription_handles: list[SubscriptionHandle] = []
@@ -79,8 +81,7 @@ class Transformation(ABC):
                 try:
                     out_list = results if isinstance(results, list) else [results]
                     await self._bridge.on_message_processed(
-                        self._component_id, "transformation",
-                        message, out_list, self.output_channel
+                        self._component_id, "transformation", message, out_list, self.output_channel
                     )
                 except Exception:
                     pass

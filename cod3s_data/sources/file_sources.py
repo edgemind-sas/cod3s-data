@@ -266,9 +266,7 @@ class CSVSource(Source):
             if self.rebase_timestamps:
                 if ts_offset is None:
                     ts_offset = datetime.now(UTC) - message.timestamp
-                message = message.model_copy(
-                    update={"timestamp": message.timestamp + ts_offset}
-                )
+                message = message.model_copy(update={"timestamp": message.timestamp + ts_offset})
 
             if self.replay and prev_ts is not None:
                 delta = (message.timestamp - prev_ts).total_seconds() / self.speed_factor

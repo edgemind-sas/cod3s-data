@@ -205,9 +205,7 @@ class TestComponentFactory:
         broker = InMemoryBroker(enable_metrics=False)
         factory = ComponentFactory(broker)
 
-        config = TransformConfig(
-            type="unknown", input_channels="input", output_channel="output"
-        )
+        config = TransformConfig(type="unknown", input_channels="input", output_channel="output")
         with pytest.raises(ValueError, match="Unknown transformation type"):
             factory.create_transformation(config)
 

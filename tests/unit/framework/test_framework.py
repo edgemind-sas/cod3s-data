@@ -238,7 +238,9 @@ class TestFrameworkPlugins:
         )
         framework = Framework(config, plugins=["plugin.b", "plugin.a"])
 
-        with patch("cod3s_data.framework.load_plugins", return_value=["plugin.a", "plugin.b"]) as mock_load:
+        with patch(
+            "cod3s_data.framework.load_plugins", return_value=["plugin.a", "plugin.b"]
+        ) as mock_load:
             await framework.start()
             # plugin.a from config, plugin.b from extra (plugin.a not duplicated)
             mock_load.assert_called_once_with(["plugin.a", "plugin.b"], framework.factory)

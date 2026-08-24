@@ -47,9 +47,7 @@ class InMemoryBroker(Broker):
     Thread-safe: Yes (uses asyncio.Lock for state)
     """
 
-    def __init__(
-        self, default_history_size: int = 100, enable_metrics: bool = True
-    ) -> None:
+    def __init__(self, default_history_size: int = 100, enable_metrics: bool = True) -> None:
         """
         Initialize in-memory broker.
 
@@ -145,9 +143,7 @@ class InMemoryBroker(Broker):
         # Observatory hook
         if self._bridge is not None:
             try:
-                await self._bridge.on_message_published(
-                    channel, message, subscriber_count
-                )
+                await self._bridge.on_message_published(channel, message, subscriber_count)
             except Exception as e:
                 _logger.warning("Observatory hook error", hook="on_message_published", error=str(e))
 
@@ -160,13 +156,19 @@ class InMemoryBroker(Broker):
                         tags=dict(getattr(message, "tags", {})),
                     )
                 except Exception as e:
-                    _logger.warning("Observatory hook error", hook="on_metric_emitted", error=str(e))
+                    _logger.warning(
+                        "Observatory hook error", hook="on_metric_emitted", error=str(e)
+                    )
 
         # Update metrics
         self._publish_count += 1
 
         # Emit metrics (if enabled, avoid recursion, throttle to every 50 messages)
-        if self._enable_metrics and not channel.startswith("_metrics.") and self._publish_count % 50 == 0:
+        if (
+            self._enable_metrics
+            and not channel.startswith("_metrics.")
+            and self._publish_count % 50 == 0
+        ):
             metric_msg = Message(
                 key="broker.publish_count",
                 timestamp=publish_time,
@@ -185,9 +187,7 @@ class InMemoryBroker(Broker):
             success=True, subscriber_count=subscriber_count, publish_time=publish_time
         )
 
-    async def _notify_subscriber(
-        self, callback: Callback, message: Message, channel: str
-    ) -> None:
+    async def _notify_subscriber(self, callback: Callback, message: Message, channel: str) -> None:
         """
         Notify a single subscriber.
 
@@ -244,9 +244,7 @@ class InMemoryBroker(Broker):
             raise InvalidPatternError("Pattern cannot be empty")
 
         # Create handle
-        handle = SubscriptionHandle(
-            id=str(uuid4()), pattern=pattern, callback=callback
-        )
+        handle = SubscriptionHandle(id=str(uuid4()), pattern=pattern, callback=callback)
 
         # Register subscription
         self._registry.add_subscription(pattern, callback)
@@ -259,13 +257,13 @@ class InMemoryBroker(Broker):
                     self._bridge.on_subscription_change(pattern, "subscribe", handle.id)
                 )
             except Exception as e:
-                _logger.warning("Observatory hook error", hook="on_subscription_change", error=str(e))
+                _logger.warning(
+                    "Observatory hook error", hook="on_subscription_change", error=str(e)
+                )
 
         # Replay history if requested
         if history != HistoryMode.NONE:
-            asyncio.create_task(
-                self._replay_history(pattern, callback, history, history_count)
-            )
+            asyncio.create_task(self._replay_history(pattern, callback, history, history_count))
 
         # Emit metric
         if self._enable_metrics:
@@ -294,9 +292,7 @@ class InMemoryBroker(Broker):
         Called asynchronously after subscription.
         """
         # Find matching channels
-        matching_channels = [
-            ch for ch in self._history if self._matches_pattern(pattern, ch)
-        ]
+        matching_channels = [ch for ch in self._history if self._matches_pattern(pattern, ch)]
 
         for channel in matching_channels:
             buffer = self._history[channel]
@@ -360,7 +356,9 @@ class InMemoryBroker(Broker):
                     self._bridge.on_subscription_change(handle.pattern, "unsubscribe", handle.id)
                 )
             except Exception as e:
-                _logger.warning("Observatory hook error", hook="on_subscription_change", error=str(e))
+                _logger.warning(
+                    "Observatory hook error", hook="on_subscription_change", error=str(e)
+                )
 
         # Emit metric
         if self._enable_metrics:

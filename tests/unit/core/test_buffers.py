@@ -174,9 +174,7 @@ class TestDestinationBuffer:
     @pytest.mark.asyncio
     async def test_drop_oldest_strategy(self):
         """Test DROP_OLDEST overflow strategy."""
-        buffer = DestinationBuffer(
-            max_size=3, overflow_strategy=OverflowStrategy.DROP_OLDEST
-        )
+        buffer = DestinationBuffer(max_size=3, overflow_strategy=OverflowStrategy.DROP_OLDEST)
 
         # Fill buffer
         for i in range(3):
@@ -201,9 +199,7 @@ class TestDestinationBuffer:
     @pytest.mark.asyncio
     async def test_drop_newest_strategy(self):
         """Test DROP_NEWEST overflow strategy."""
-        buffer = DestinationBuffer(
-            max_size=3, overflow_strategy=OverflowStrategy.DROP_NEWEST
-        )
+        buffer = DestinationBuffer(max_size=3, overflow_strategy=OverflowStrategy.DROP_NEWEST)
 
         # Fill buffer
         for i in range(3):

@@ -62,7 +62,9 @@ class TransformConfig(BaseModel):
     description: str | None = Field(default=None, description="Detailed description shown on hover")
     input_channels: str | list[str] = Field(..., description="Input channel(s)")
     output_channel: str = Field(..., description="Output channel")
-    params: dict[str, Any] = Field(default_factory=dict, description="Transform-specific parameters")
+    params: dict[str, Any] = Field(
+        default_factory=dict, description="Transform-specific parameters"
+    )
 
 
 class DestinationConfig(BaseModel):
@@ -72,7 +74,9 @@ class DestinationConfig(BaseModel):
     label: str | None = Field(default=None, description="Human-readable label for display")
     description: str | None = Field(default=None, description="Detailed description shown on hover")
     channel_pattern: str = Field(..., description="Channel pattern to subscribe to")
-    params: dict[str, Any] = Field(default_factory=dict, description="Destination-specific parameters")
+    params: dict[str, Any] = Field(
+        default_factory=dict, description="Destination-specific parameters"
+    )
 
 
 class BrokerConfig(BaseModel):

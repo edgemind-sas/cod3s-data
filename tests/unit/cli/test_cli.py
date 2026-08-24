@@ -115,7 +115,7 @@ class TestValidateCommand:
             "    input_channels: input\n"
             "    output_channel: output\n"
             "    params:\n"
-            "      map_fn_code: \"lambda x: x * 2\"\n"
+            '      map_fn_code: "lambda x: x * 2"\n'
             "destinations:\n"
             "  - type: console\n"
             "    channel_pattern: output\n"
@@ -173,8 +173,11 @@ class TestRunCommand:
     def test_run_missing_file(self, capsys):
         """run on non-existent file returns 1."""
         args = argparse.Namespace(
-            config="/nonexistent/path.yaml", verbose=False,
-            log_level="INFO", json_logs=False, plugin=None,
+            config="/nonexistent/path.yaml",
+            verbose=False,
+            log_level="INFO",
+            json_logs=False,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -201,8 +204,11 @@ class TestRunCommand:
             "    params: {}\n"
         )
         args = argparse.Namespace(
-            config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=False, plugin=None,
+            config=str(config_file),
+            verbose=False,
+            log_level="WARNING",
+            json_logs=False,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
@@ -214,8 +220,11 @@ class TestRunCommand:
         config_file = tmp_path / "bad.yaml"
         config_file.write_text("sources:\n  - type: unknown_type\n    channel: x\n")
         args = argparse.Namespace(
-            config=str(config_file), verbose=True,
-            log_level="WARNING", json_logs=False, plugin=None,
+            config=str(config_file),
+            verbose=True,
+            log_level="WARNING",
+            json_logs=False,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -227,8 +236,11 @@ class TestRunCommand:
         config_file = tmp_path / "bad.yaml"
         config_file.write_text("sources:\n  - type: unknown_type\n    channel: x\n")
         args = argparse.Namespace(
-            config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=False, plugin=None,
+            config=str(config_file),
+            verbose=False,
+            log_level="WARNING",
+            json_logs=False,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 1
@@ -256,8 +268,11 @@ class TestRunCommand:
             "    params: {}\n"
         )
         args = argparse.Namespace(
-            config=str(config_file), verbose=False,
-            log_level="WARNING", json_logs=True, plugin=None,
+            config=str(config_file),
+            verbose=False,
+            log_level="WARNING",
+            json_logs=True,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
@@ -282,8 +297,11 @@ class TestRunCommand:
             "    params: {}\n"
         )
         args = argparse.Namespace(
-            config=str(config_file), verbose=False,
-            log_level="DEBUG", json_logs=False, plugin=None,
+            config=str(config_file),
+            verbose=False,
+            log_level="DEBUG",
+            json_logs=False,
+            plugin=None,
         )
         result = run_pipeline(args)
         assert result == 0
@@ -313,8 +331,10 @@ class TestRunCommand:
 
         with patch.dict("sys.modules", {"fake_run_plugin": fake_plugin}):
             args = argparse.Namespace(
-                config=str(config_file), verbose=False,
-                log_level="WARNING", json_logs=False,
+                config=str(config_file),
+                verbose=False,
+                log_level="WARNING",
+                json_logs=False,
                 plugin=["fake_run_plugin"],
             )
             result = run_pipeline(args)

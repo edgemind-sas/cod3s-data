@@ -36,32 +36,34 @@ _UNARY_OPS: dict[type, Any] = {
 }
 
 # Whitelist of allowed AST node types
-_ALLOWED_NODES = frozenset({
-    ast.Expression,
-    ast.BoolOp,
-    ast.And,
-    ast.Or,
-    ast.Compare,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Constant,
-    ast.Name,
-    ast.Attribute,
-    ast.Load,
-    ast.Gt,
-    ast.GtE,
-    ast.Lt,
-    ast.LtE,
-    ast.Eq,
-    ast.NotEq,
-    ast.In,
-    ast.NotIn,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.USub,
-    ast.Not,
-})
+_ALLOWED_NODES = frozenset(
+    {
+        ast.Expression,
+        ast.BoolOp,
+        ast.And,
+        ast.Or,
+        ast.Compare,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Constant,
+        ast.Name,
+        ast.Attribute,
+        ast.Load,
+        ast.Gt,
+        ast.GtE,
+        ast.Lt,
+        ast.LtE,
+        ast.Eq,
+        ast.NotEq,
+        ast.In,
+        ast.NotIn,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.USub,
+        ast.Not,
+    }
+)
 
 
 def validate_expression(expr: str) -> None:
@@ -114,9 +116,7 @@ def _check_tree(tree: ast.AST) -> None:
         if isinstance(node, ast.Attribute) and (
             not isinstance(node.value, ast.Name) or node.value.id != "tags"
         ):
-            raise ValueError(
-                f"Attribute access only allowed for 'tags.*', got '{ast.dump(node)}'"
-            )
+            raise ValueError(f"Attribute access only allowed for 'tags.*', got '{ast.dump(node)}'")
 
 
 def _eval_node(node: ast.AST, ctx: dict[str, Any]) -> Any:

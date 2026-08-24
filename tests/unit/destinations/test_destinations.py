@@ -21,6 +21,7 @@ from cod3s_data.sources import SequenceSource
 
 def create_message(key: str = "test", value: float = 42.0) -> Message:
     from datetime import datetime
+
     return Message(key=key, timestamp=datetime.now(UTC), value=value, tags={})
 
 
@@ -67,7 +68,7 @@ class TestFileDestination:
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.jsonl') as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
             file_path = Path(f.name)
 
         try:
@@ -81,7 +82,7 @@ class TestFileDestination:
             await dest.stop()
 
             content = file_path.read_text()
-            lines = content.strip().split('\n')
+            lines = content.strip().split("\n")
             assert len(lines) == 2
 
         finally:
@@ -93,7 +94,7 @@ class TestFileDestination:
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
 
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.jsonl') as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
             file_path = Path(f.name)
             f.write('{"existing":"line"}\n')
 
@@ -107,9 +108,9 @@ class TestFileDestination:
             await dest.stop()
 
             content = file_path.read_text()
-            lines = content.strip().split('\n')
+            lines = content.strip().split("\n")
             assert len(lines) == 2
-            assert 'existing' in lines[0]
+            assert "existing" in lines[0]
 
         finally:
             file_path.unlink()
@@ -144,6 +145,7 @@ class TestCollectDestination:
         await dest.start()
 
         from datetime import datetime
+
         msg1 = Message(key="temp", timestamp=datetime.now(UTC), value=1.0, tags={"sensor": "A"})
         msg2 = Message(key="temp", timestamp=datetime.now(UTC), value=2.0, tags={"sensor": "B"})
         msg3 = Message(key="pressure", timestamp=datetime.now(UTC), value=3.0, tags={"sensor": "A"})
@@ -170,9 +172,7 @@ class TestDestinationBuffering:
         await broker.start()
 
         dest = InMemoryDestination(
-            broker, "test.channel",
-            buffer_size=5,
-            overflow_strategy=OverflowStrategy.DROP_OLDEST
+            broker, "test.channel", buffer_size=5, overflow_strategy=OverflowStrategy.DROP_OLDEST
         )
         await dest.start()
 
@@ -205,7 +205,9 @@ class TestDestinationRetry:
                     raise RuntimeError("Temporary failure")
                 await super().write(message)
 
-        dest = FailingDestination(broker, "test.channel", retry_attempts=5, retry_strategy=RetryStrategy.FIXED)
+        dest = FailingDestination(
+            broker, "test.channel", retry_attempts=5, retry_strategy=RetryStrategy.FIXED
+        )
         await dest.start()
 
         await broker.publish("test.channel", create_message(value=1.0))
@@ -223,6 +225,7 @@ class TestDestinationRetry:
         await broker.start()
 
         dlq_messages = []
+
         async def dlq_callback(msg: Message):
             dlq_messages.append(msg)
 
@@ -233,10 +236,11 @@ class TestDestinationRetry:
                 raise RuntimeError("Always fails")
 
         dest = AlwaysFailingDestination(
-            broker, "test.channel",
+            broker,
+            "test.channel",
             retry_attempts=2,
             retry_strategy=RetryStrategy.FIXED,
-            dlq_channel="dlq.channel"
+            dlq_channel="dlq.channel",
         )
         await dest.start()
 
@@ -298,11 +302,7 @@ class TestDestinationIntegration:
         dest = InMemoryDestination(broker, "test.channel")
         await dest.start()
 
-        source = SequenceSource(
-            broker, "test.channel",
-            start_value=0, end_value=5,
-            rate=100.0
-        )
+        source = SequenceSource(broker, "test.channel", start_value=0, end_value=5, rate=100.0)
 
         await source.start()
         await asyncio.sleep(0.1)

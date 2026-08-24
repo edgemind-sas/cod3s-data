@@ -113,7 +113,10 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ("COD3S_OBSERVATORY_SAMPLING_INTERVAL_MS", "interval_ms", "int"),
     ]
 
-    has_any = any(os.getenv(env) is not None for env, _, _ in obs_env_map + obs_debug_env_map + obs_sampling_env_map)
+    has_any = any(
+        os.getenv(env) is not None
+        for env, _, _ in obs_env_map + obs_debug_env_map + obs_sampling_env_map
+    )
     if not has_any:
         return config
 

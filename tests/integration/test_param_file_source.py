@@ -18,12 +18,7 @@ class TestParamFileSource:
     async def test_flatten_yaml_publishes_per_path(self, tmp_path: Path):
         params_file = tmp_path / "job.yaml"
         params_file.write_text(
-            "alarm:\n"
-            "  extruder:\n"
-            "    setpoint: 215\n"
-            "    tolerance: 5\n"
-            "  bed:\n"
-            "    setpoint: 60\n"
+            "alarm:\n  extruder:\n    setpoint: 215\n    tolerance: 5\n  bed:\n    setpoint: 60\n"
         )
 
         broker = InMemoryBroker(enable_metrics=False)
@@ -89,9 +84,7 @@ class TestParamFileSource:
     async def test_missing_file_raises(self, tmp_path: Path):
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
-        source = ParamFileSource(
-            broker, channel="params", file_path=tmp_path / "missing.yaml"
-        )
+        source = ParamFileSource(broker, channel="params", file_path=tmp_path / "missing.yaml")
         with pytest.raises(FileNotFoundError):
             await source.start()
         await broker.stop()

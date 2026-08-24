@@ -37,12 +37,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         connected_payload["components"] = bridge.get_components_snapshot()
         connected_payload["topology"] = bridge.get_topology_snapshot()
 
-        await websocket.send_json({
-            "type": "connected",
-            "id": f"evt-{client_id}",
-            "timestamp": datetime.now(UTC).isoformat(),
-            "payload": connected_payload,
-        })
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "id": f"evt-{client_id}",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "payload": connected_payload,
+            }
+        )
 
         # Process incoming commands
         while True:

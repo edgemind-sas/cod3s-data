@@ -503,8 +503,7 @@ class DeviationFilterTransform(StatelessTransform):
     ) -> None:
         if (tolerance_pct is None) == (tolerance_abs is None):
             raise ValueError(
-                "DeviationFilterTransform requires exactly one of "
-                "tolerance_pct or tolerance_abs"
+                "DeviationFilterTransform requires exactly one of tolerance_pct or tolerance_abs"
             )
         if mode not in ("reject", "clip"):
             raise ValueError(f"mode must be 'reject' or 'clip', got {mode!r}")
@@ -590,8 +589,7 @@ class RelativeAlarmTransform(StatefulTransform):
     ) -> None:
         if (tolerance_pct is None) == (tolerance_abs is None):
             raise ValueError(
-                "RelativeAlarmTransform requires exactly one of "
-                "tolerance_pct or tolerance_abs"
+                "RelativeAlarmTransform requires exactly one of tolerance_pct or tolerance_abs"
             )
         super().__init__(broker, input_channels, output_channel)
         self.setpoint = setpoint

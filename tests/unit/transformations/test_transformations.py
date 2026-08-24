@@ -969,9 +969,7 @@ class TestMovingAverageTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = MovingAverageTransform(
-            broker, "in", "out", window_type="count", window_size=3
-        )
+        transform = MovingAverageTransform(broker, "in", "out", window_type="count", window_size=3)
         await transform.start()
 
         for v in [10.0, 20.0, 30.0, 40.0]:
@@ -1019,9 +1017,7 @@ class TestMovingAverageTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = MovingAverageTransform(
-            broker, "in", "out", window_type="count", window_size=2
-        )
+        transform = MovingAverageTransform(broker, "in", "out", window_type="count", window_size=2)
         await transform.start()
 
         await broker.publish("in", _make_message("a", 100.0))
@@ -1077,9 +1073,7 @@ class TestMovingAverageTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = MovingAverageTransform(
-            broker, "in", "out", window_type="count", window_size=3
-        )
+        transform = MovingAverageTransform(broker, "in", "out", window_type="count", window_size=3)
         await transform.start()
 
         await broker.publish(
@@ -1263,9 +1257,7 @@ class TestRelativeAlarmTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = RelativeAlarmTransform(
-            broker, "in", "out", setpoint=300.0, tolerance_abs=10.0
-        )
+        transform = RelativeAlarmTransform(broker, "in", "out", setpoint=300.0, tolerance_abs=10.0)
         await transform.start()
 
         # ok, ok, ALARM (transition emit), ALARM (no emit), ok (transition emit), ok (no emit)
