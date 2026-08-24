@@ -39,6 +39,8 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+coverage.xml
+report.xml
 .tox/
 .hypothesis/
 
