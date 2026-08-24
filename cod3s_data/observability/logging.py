@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 import structlog
-from structlog.typing import FilteringBoundLogger
+from structlog.typing import FilteringBoundLogger, Processor
 
 
 def configure_logging(
@@ -39,7 +39,7 @@ def configure_logging(
     )
 
     # Shared processors for both formats
-    shared_processors = [
+    shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
@@ -50,7 +50,7 @@ def configure_logging(
     # Format-specific processors
     if format == "json":
         # JSON format for production
-        renderer = structlog.processors.JSONRenderer()
+        renderer: Processor = structlog.processors.JSONRenderer()
     else:
         # Console format for development
         renderer = structlog.dev.ConsoleRenderer(colors=enable_colors)
@@ -100,7 +100,7 @@ def get_logger(name: str, **initial_context: Any) -> FilteringBoundLogger:
         >>> logger = get_logger(__name__, component="broker", node_id="node-1")
         >>> logger.info("message_published", channel="sensors.temp", count=1)
     """
-    logger = structlog.get_logger(name)
+    logger: FilteringBoundLogger = structlog.get_logger(name)
     if initial_context:
         logger = logger.bind(**initial_context)
     return logger

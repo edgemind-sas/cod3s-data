@@ -177,7 +177,9 @@ class ObservatoryBridge:
         journey = self._journey_store.get_journey(trace_id)
         if not journey:
             return ""
-        published_channels = [s["channel"] for s in journey if s["stage"] == "PUBLISHED"]
+        published_channels: list[str] = [
+            s["channel"] for s in journey if s["stage"] == "PUBLISHED"
+        ]
         for channel in published_channels:
             for pattern in patterns:
                 if SubscriptionRegistry.matches(pattern, channel):
@@ -376,7 +378,7 @@ class ObservatoryBridge:
     async def on_metric_emitted(
         self,
         metric_name: str,
-        value: float | dict,
+        value: float | dict[str, Any],
         tags: dict[str, str],
     ) -> None:
         """Called when the framework emits a metric."""
@@ -515,7 +517,7 @@ class ObservatoryBridge:
 
     # --- Message Inspector ---
 
-    def get_message_detail(self, message_id: str) -> dict | None:
+    def get_message_detail(self, message_id: str) -> dict[str, Any] | None:
         """Return complete message detail + journey for the WS handler."""
         if self._message_store is None:
             return None
@@ -523,7 +525,7 @@ class ObservatoryBridge:
         if detail is None:
             return None
         trace_id = detail.get("trace_id", message_id)
-        journey: list[dict] = []
+        journey: list[dict[str, Any]] = []
         if self._journey_store is not None:
             journey = self._journey_store.get_journey(trace_id) or []
         return {**detail, "journey": journey}
@@ -543,25 +545,35 @@ class ObservatoryBridge:
         """Start the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        return await self._framework.handle_pipeline_command("start")
+        result: dict[str, str] = await self._framework.handle_pipeline_command(
+            "start"
+        )
+        return result
 
     async def stop_pipeline(self) -> dict[str, str]:
         """Stop the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        return await self._framework.handle_pipeline_command("stop")
+        result: dict[str, str] = await self._framework.handle_pipeline_command(
+            "stop"
+        )
+        return result
 
     async def restart_pipeline(self) -> dict[str, str]:
         """Restart the pipeline via framework."""
         if self._framework is None:
             return {"status": "error", "message": "No framework connected"}
-        return await self._framework.handle_pipeline_command("restart")
+        result: dict[str, str] = await self._framework.handle_pipeline_command(
+            "restart"
+        )
+        return result
 
     def get_pipeline_state(self) -> str:
         """Get current pipeline state."""
         if self._framework is None:
             return "unknown"
-        return self._framework._pipeline_state.value
+        state: str = self._framework._pipeline_state.value
+        return state
 
     def get_pipeline_info(self) -> dict[str, str]:
         """Get pipeline display metadata for the Observatory UI."""

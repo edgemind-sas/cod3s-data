@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
@@ -27,7 +28,7 @@ class JourneyStep:
     label: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -40,13 +41,13 @@ class MessageDetailStore:
 
     def __init__(self, max_entries: int = 500) -> None:
         self._max_entries = max_entries
-        self._store: OrderedDict[str, dict] = OrderedDict()
+        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def store(
         self,
         message_id: str,
         channel: str,
-        message_dict: dict,
+        message_dict: dict[str, Any],
         subscriber_count: int,
         trace_id: str,
     ) -> None:
@@ -67,7 +68,7 @@ class MessageDetailStore:
             **message_dict,
         }
 
-    def get(self, message_id: str) -> dict | None:
+    def get(self, message_id: str) -> dict[str, Any] | None:
         """Retrieve message details, updating LRU position."""
         if message_id not in self._store:
             return None
@@ -101,7 +102,7 @@ class JourneyStore:
                 self._store.popitem(last=False)
             self._store[trace_id] = [step]
 
-    def get_journey(self, trace_id: str) -> list[dict] | None:
+    def get_journey(self, trace_id: str) -> list[dict[str, Any]] | None:
         """Retrieve journey steps for a trace_id."""
         if trace_id not in self._store:
             return None

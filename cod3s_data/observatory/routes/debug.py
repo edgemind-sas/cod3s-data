@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from cod3s_data.observatory.debug import DebugController
+
 router = APIRouter()
 
 
@@ -20,7 +22,7 @@ class BreakpointCreate(BaseModel):
 @router.get("/breakpoints")
 async def list_breakpoints(request: Request) -> list[dict[str, Any]]:
     """List all breakpoints."""
-    debug = request.app.state.debug_controller
+    debug: DebugController = request.app.state.debug_controller
     return debug.breakpoint_evaluator.list_all()
 
 
@@ -54,5 +56,5 @@ async def delete_breakpoint(breakpoint_id: str, request: Request) -> None:
 @router.get("/state")
 async def debug_state(request: Request) -> dict[str, Any]:
     """Return current debug state."""
-    debug = request.app.state.debug_controller
+    debug: DebugController = request.app.state.debug_controller
     return debug.get_state_dict()

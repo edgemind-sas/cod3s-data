@@ -71,6 +71,7 @@ class Source(ABC):
         self._bridge: Any = None
         self._component_id: str = ""
         self._label: str = ""
+        self._description: str = ""
 
     async def start(self) -> None:
         """
@@ -151,7 +152,7 @@ class Source(ABC):
             )
 
     @abstractmethod
-    async def produce(self) -> AsyncIterator[Message]:
+    def produce(self) -> AsyncIterator[Message]:
         """
         Generate messages (implemented by subclass).
 
@@ -169,7 +170,6 @@ class Source(ABC):
             ...         )
         """
         ...
-        yield  # Make this a generator for type checking
 
     async def _notify_state_change(self, old_state: str, new_state: str) -> None:
         """Notify Observatory bridge of state change."""

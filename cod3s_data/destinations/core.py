@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, cast
 
 from cod3s_data.broker.base import Broker
 from cod3s_data.core.buffers import OverflowStrategy
@@ -67,7 +67,7 @@ class FileDestination(Destination):
         async with self._lock:
             if self._file_handle is None:
                 mode = "a" if self.append else "w"
-                self._file_handle = self.file_path.open(mode, encoding="utf-8")
+                self._file_handle = cast(TextIO, self.file_path.open(mode, encoding="utf-8"))
             self._file_handle.write(message.to_json() + "\n")
             self._file_handle.flush()
 

@@ -39,6 +39,7 @@ class Transformation(ABC):
         self._bridge: Any = None
         self._component_id: str = ""
         self._label: str = ""
+        self._description: str = ""
 
     async def start(self) -> None:
         """Start the transformation."""

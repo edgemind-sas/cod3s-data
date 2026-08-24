@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import cast
 
 from cod3s_data.config.loaders import load_yaml
 from cod3s_data.framework import Framework
@@ -76,7 +77,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         else:
             print(f"Starting pipeline: {config.name}")
 
-        async def run():
+        async def run() -> None:
             async with Framework(config, observatory=observatory) as framework:
                 await framework.run()
 
@@ -280,7 +281,7 @@ def main() -> int:
         return 1
 
     # Execute command
-    return args.func(args)
+    return cast(int, args.func(args))
 
 
 if __name__ == "__main__":

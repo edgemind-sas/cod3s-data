@@ -59,6 +59,7 @@ class Destination(ABC):
         self._bridge: Any = None
         self._component_id: str = ""
         self._label: str = ""
+        self._description: str = ""
 
     async def start(self) -> None:
         self._running = True
@@ -148,7 +149,7 @@ class Destination(ABC):
 
     def _calculate_backoff(self, attempt: int) -> float:
         if self.retry_strategy == RetryStrategy.EXPONENTIAL:
-            return min(2**attempt, 60)
+            return float(min(2**attempt, 60))
         else:
             return 1.0
 
