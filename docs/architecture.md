@@ -189,4 +189,5 @@ this.
 
 Fixing it means deciding how the artifact is produced at build time — commit
 it, build it in CI before packaging, or use a build hook — which is a packaging
-decision, not a documentation one. Tracked in [BACKLOG.md](../BACKLOG.md).
+decision, not a documentation one. Tracked as
+[issue #1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1).

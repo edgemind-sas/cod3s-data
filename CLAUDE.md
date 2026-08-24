@@ -112,7 +112,9 @@ documentation drifted badly once and was rebuilt with scripted checks; the
 useful habit is to instantiate a pipeline through the real `ComponentFactory`
 rather than trusting that a config validates.
 
-Read `BACKLOG.md` before assuming something is missing by accident — several
-gaps are known and recorded, including the wheel not shipping the Observatory
-UI. `docs/architecture.md` records why the framework is shaped this way and the
+Read `BACKLOG.md` before assuming something is missing by accident — it indexes
+the issue tracker, where the known gaps are recorded, including the wheel not
+shipping the Observatory UI (#1).
+
+`docs/architecture.md` records why the framework is shaped this way, and the
 four places the code has diverged from its own design decisions.
