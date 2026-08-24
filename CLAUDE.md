@@ -105,9 +105,17 @@ separate metrics system.
 
 ## Working here
 
+Work on a branch and open a merge request; do not commit to `main` directly.
+The pipeline only fires on a merge request, on `main`, or on a tag — pushing a
+branch on its own runs nothing, so the MR is what gets the change tested before
+it lands.
+
 Keep `ruff check`, `ruff format --check`, `mypy` and `pytest` clean rather than
-adding ignores — CI runs all four on merge requests, `main` and tags
-(`.gitlab-ci.yml`).
+adding ignores — CI runs all four, plus the frontend build and the wheel
+packaging check (`.gitlab-ci.yml`).
+
+MR descriptions are written in French, but a closing keyword must be in English
+to work: `Closes #12`, never « Ferme #12 ».
 
 Before documenting behaviour, verify it against the code or by running it. The
 documentation drifted badly once and was rebuilt with scripted checks; the
