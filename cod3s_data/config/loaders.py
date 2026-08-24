@@ -109,7 +109,7 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
 
     obs_sampling_env_map: list[tuple[str, str, str]] = [
         ("COD3S_OBSERVATORY_SAMPLING_STRATEGY", "strategy", "str"),
-        ("COD3S_OBSERVATORY_SAMPLING_RATE", "rate", "float"),
+        ("COD3S_OBSERVATORY_SAMPLING_RATE", "rate", "int"),
         ("COD3S_OBSERVATORY_SAMPLING_INTERVAL_MS", "interval_ms", "int"),
     ]
 
