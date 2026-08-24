@@ -249,7 +249,9 @@ and the absence of regressions, not an absolute figure.
 - [API reference](docs/api-reference.md) — every component, configuration, and channel semantics
 - [Observatory](docs/observatory.md) — the web UI, its configuration, REST and WebSocket APIs
 - [Examples](examples/README.md) — seven runnable pipelines
-- [Specifications](docs/specifications/) — the original design documents (frozen; see the API reference for current behaviour)
+- [Architecture decisions](docs/architecture.md) — why the framework is shaped this way, and where the code has diverged
+- [Glossary](docs/glossary.md) — the project's vocabulary
+- [Backlog](BACKLOG.md) — known defects, gaps and unbuilt features
 
 ## License
 

@@ -39,10 +39,12 @@ curl -X POST http://localhost:8765/api/params/params.alarm.extruder.setpoint \
 | Watch a pipeline while it runs | [docs/observatory.md](docs/observatory.md) |
 | See working pipelines | [examples/README.md](examples/README.md) — seven of them |
 | Install on Windows | [README_WINDOWS.md](README_WINDOWS.md) |
+| Understand why it is built this way | [docs/architecture.md](docs/architecture.md) |
+| Know what is missing or broken | [BACKLOG.md](BACKLOG.md) |
 
-The [specifications](docs/specifications/) are the original design documents.
-They describe the framework as it was designed in January and February 2026 and
-have not tracked the code since; read them for intent, not for behaviour.
+[docs/glossary.md](docs/glossary.md) defines the vocabulary — several of these
+words mean something slightly different here than in other streaming
+frameworks.
 
 ## Where the code is
 

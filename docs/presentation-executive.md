@@ -1,3 +1,14 @@
+<!--
+Executive slide deck (Marp), written 2026-01-24. Kept when the design
+specifications were removed because its content — problem framing, value
+proposition, positioning, success criteria — is not derivable from the code and
+is not an API description. Its capability and roadmap slides date from before
+the Observatory, InfluxDB and dynamic parameters shipped; check them against
+README.md and BACKLOG.md before presenting.
+
+Render with: npx @marp-team/marp-cli docs/presentation-executive.md -o out.html
+-->
+
 ---
 marp: true
 theme: default
