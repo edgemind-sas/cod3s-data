@@ -1,6 +1,5 @@
 """Tests for Observatory EventBuffer."""
 
-import pytest
 
 from cod3s_data.observatory.buffer import EventBuffer, EventType, ObservatoryEvent
 

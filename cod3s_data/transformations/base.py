@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -64,12 +66,10 @@ class Transformation(ABC):
         try:
             # Observatory: RECEIVED
             if self._bridge is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await self._bridge.on_message_received(
                         self._component_id, "transformation", message
                     )
-                except Exception:
-                    pass
 
             results = await self.transform(message)
 

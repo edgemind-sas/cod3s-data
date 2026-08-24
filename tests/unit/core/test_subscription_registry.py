@@ -1,10 +1,10 @@
 """Unit tests for SubscriptionRegistry."""
 
+
 import pytest
 
 from cod3s_data.core.message import Message
 from cod3s_data.core.subscription_registry import SubscriptionRegistry
-from datetime import datetime, timezone
 
 
 class TestExactMatches:

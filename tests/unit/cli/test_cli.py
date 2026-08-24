@@ -2,7 +2,6 @@
 
 import argparse
 import types
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,7 +144,7 @@ class TestValidateCommand:
             "destinations: []\n"
         )
         # Mock load_plugins to avoid real import
-        with patch("cod3s_data.plugins.load_plugin") as mock_load_plugin:
+        with patch("cod3s_data.plugins.load_plugin"):
             args = argparse.Namespace(config=str(config_file), verbose=False, plugin=None)
             result = validate_pipeline(args)
 

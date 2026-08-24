@@ -1,7 +1,7 @@
 """Unit tests for buffer classes."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,7 @@ def create_message(key: str = "temp", value: float = 42.0, **kwargs) -> Message:
     """Helper to create test messages."""
     return Message(
         key=key,
-        timestamp=kwargs.get("timestamp", datetime.now(timezone.utc)),
+        timestamp=kwargs.get("timestamp", datetime.now(UTC)),
         value=value,
         tags=kwargs.get("tags", {}),
     )
@@ -90,7 +90,7 @@ class TestHistoryBuffer:
         buffer = HistoryBuffer(max_size=10, ttl=timedelta(seconds=1))
 
         # Add old message
-        old_time = datetime.now(timezone.utc) - timedelta(seconds=2)
+        old_time = datetime.now(UTC) - timedelta(seconds=2)
         buffer.add(create_message(value=1.0, timestamp=old_time))
 
         # Add recent message
@@ -329,7 +329,7 @@ class TestTimeWindow:
         window = TimeWindow(duration=timedelta(seconds=1))
 
         # Add old message
-        old_time = datetime.now(timezone.utc) - timedelta(seconds=2)
+        old_time = datetime.now(UTC) - timedelta(seconds=2)
         window.add(create_message(value=1.0, timestamp=old_time))
 
         # Add recent message (triggers eviction)

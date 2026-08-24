@@ -111,11 +111,12 @@ def _check_tree(tree: ast.AST) -> None:
             )
 
         # Extra safety: only allow Attribute for tags.* pattern
-        if isinstance(node, ast.Attribute):
-            if not isinstance(node.value, ast.Name) or node.value.id != "tags":
-                raise ValueError(
-                    f"Attribute access only allowed for 'tags.*', got '{ast.dump(node)}'"
-                )
+        if isinstance(node, ast.Attribute) and (
+            not isinstance(node.value, ast.Name) or node.value.id != "tags"
+        ):
+            raise ValueError(
+                f"Attribute access only allowed for 'tags.*', got '{ast.dump(node)}'"
+            )
 
 
 def _eval_node(node: ast.AST, ctx: dict[str, Any]) -> Any:
@@ -135,7 +136,7 @@ def _eval_node(node: ast.AST, ctx: dict[str, Any]) -> Any:
 
     if isinstance(node, ast.Compare):
         left = _eval_node(node.left, ctx)
-        for op_node, comparator in zip(node.ops, node.comparators):
+        for op_node, comparator in zip(node.ops, node.comparators, strict=True):
             right = _eval_node(comparator, ctx)
             op_func = _CMP_OPS.get(type(op_node))
             if op_func is None:

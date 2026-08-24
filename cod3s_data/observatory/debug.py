@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -249,14 +249,13 @@ class DebugController:
                 return
 
         # Handle stepping
-        if self._state == DebugState.STEPPING:
-            if self._granularity == DebugGranularity.MESSAGE:
-                self._last_step_result = {
-                    "type": "step_completed",
-                    "channel": channel,
-                }
-                self._step_completed.set()
-                return
+        if self._state == DebugState.STEPPING and self._granularity == DebugGranularity.MESSAGE:
+            self._last_step_result = {
+                "type": "step_completed",
+                "channel": channel,
+            }
+            self._step_completed.set()
+            return
 
         # Handle slow-motion
         if self._slow_motion and self._state == DebugState.RUNNING:

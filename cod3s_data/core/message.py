@@ -1,6 +1,6 @@
 """Core message structure for COD3S Data Framework."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -107,8 +107,8 @@ class Message(BaseModel):
             )
 
         # Convert to UTC if not already
-        if v.tzinfo != timezone.utc:
-            v = v.astimezone(timezone.utc)
+        if v.tzinfo != UTC:
+            v = v.astimezone(UTC)
 
         return v
 

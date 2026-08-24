@@ -1,7 +1,7 @@
 """Unit tests for Message class."""
 
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
@@ -17,7 +17,7 @@ class TestMessageCreation:
         """Test creating a message with minimal required fields."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
         )
 
@@ -30,7 +30,7 @@ class TestMessageCreation:
         """Test creating a message with tags."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001", "location": "warehouse_A"},
         )
@@ -41,7 +41,7 @@ class TestMessageCreation:
         """Test that messages are immutable."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
         )
 
@@ -70,12 +70,12 @@ class TestTimestampValidation:
         """Test that timezone-aware timestamps are accepted."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
         )
 
         assert msg.timestamp.tzinfo is not None
-        assert msg.timestamp.tzinfo == timezone.utc
+        assert msg.timestamp.tzinfo == UTC
 
     def test_non_utc_timestamp_converted(self):
         """Test that non-UTC timezones are converted to UTC."""
@@ -90,7 +90,7 @@ class TestTimestampValidation:
         )
 
         # Should be converted to UTC
-        assert msg.timestamp.tzinfo == timezone.utc
+        assert msg.timestamp.tzinfo == UTC
 
 
 class TestKeyValidation:
@@ -101,7 +101,7 @@ class TestKeyValidation:
         with pytest.raises(ValidationError) as exc_info:
             Message(
                 key="",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=42.5,
             )
 
@@ -114,7 +114,7 @@ class TestKeyValidation:
         with pytest.raises(ValidationError) as exc_info:
             Message(
                 key="   ",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=42.5,
             )
 
@@ -125,7 +125,7 @@ class TestKeyValidation:
         """Test that keys are trimmed."""
         msg = Message(
             key="  temperature  ",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
         )
 
@@ -139,7 +139,7 @@ class TestTagValidation:
         """Test that tag values are converted to strings."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001", "count": 42, "active": True},  # type: ignore
         )
@@ -154,7 +154,7 @@ class TestSerialization:
 
     def test_to_json(self):
         """Test JSON serialization."""
-        now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
+        now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC)
         msg = Message(
             key="temperature",
             timestamp=now,
@@ -189,7 +189,7 @@ class TestSerialization:
 
     def test_to_dict(self):
         """Test dictionary conversion."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         msg = Message(
             key="temperature",
             timestamp=now,
@@ -208,7 +208,7 @@ class TestSerialization:
         """Test creating message from dictionary."""
         data = {
             "key": "temperature",
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
             "value": 42.5,
             "tags": {"sensor": "TH001"},
         }
@@ -223,7 +223,7 @@ class TestSerialization:
         """Test JSON roundtrip preserves data."""
         original = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001", "location": "warehouse"},
         )
@@ -245,7 +245,7 @@ class TestUtilityMethods:
         """Test adding tags to a message."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001"},
         )
@@ -271,7 +271,7 @@ class TestUtilityMethods:
         """Test that with_tags overwrites existing tags."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001"},
         )
@@ -284,7 +284,7 @@ class TestUtilityMethods:
         """Test changing message value."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001"},
         )
@@ -310,7 +310,7 @@ class TestRepr:
         """Test that repr contains key fields."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
             tags={"sensor": "TH001"},
         )
@@ -329,7 +329,7 @@ class TestValueTypes:
         """Test numeric values."""
         msg = Message(
             key="temperature",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=42.5,
         )
         assert msg.value == 42.5
@@ -338,7 +338,7 @@ class TestValueTypes:
         """Test string values."""
         msg = Message(
             key="status",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value="OK",
         )
         assert msg.value == "OK"
@@ -347,7 +347,7 @@ class TestValueTypes:
         """Test dictionary values."""
         msg = Message(
             key="sensor_data",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value={"temp": 42.5, "humidity": 65.0},
         )
         assert msg.value == {"temp": 42.5, "humidity": 65.0}
@@ -356,7 +356,7 @@ class TestValueTypes:
         """Test list values."""
         msg = Message(
             key="readings",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=[1, 2, 3, 4, 5],
         )
         assert msg.value == [1, 2, 3, 4, 5]
@@ -365,7 +365,7 @@ class TestValueTypes:
         """Test None value."""
         msg = Message(
             key="status",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=None,
         )
         assert msg.value is None

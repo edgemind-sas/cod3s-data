@@ -90,11 +90,14 @@ class AggregateTransform(StatefulTransform):
         state["window"].append(message)
 
         # Count-based window - check after adding
-        if self.window_type == "count" and self.window_size:
-            if len(state["window"]) >= self.window_size:
-                result = self._create_aggregate(state["window"], message.key)
-                state["window"] = []
-                state["window_start"] = datetime.now(UTC)
+        if (
+            self.window_type == "count"
+            and self.window_size
+            and len(state["window"]) >= self.window_size
+        ):
+            result = self._create_aggregate(state["window"], message.key)
+            state["window"] = []
+            state["window_start"] = datetime.now(UTC)
 
         return result
 

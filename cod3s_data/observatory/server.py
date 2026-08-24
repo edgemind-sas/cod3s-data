@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import structlog
@@ -58,12 +59,10 @@ class EmbeddedServer:
             if self._task is not None:
                 try:
                     await asyncio.wait_for(self._task, timeout=3.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except (TimeoutError, asyncio.CancelledError):
                     self._task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._task
-                    except asyncio.CancelledError:
-                        pass
                 except Exception:
                     pass
             logger.info("Observatory stopped")

@@ -1,7 +1,7 @@
 """Unit tests for test sources (RandomSource, SequenceSource)."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -72,9 +72,9 @@ class TestRandomSource:
             max_messages=3,
         )
 
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         await source.start()
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
 
         # Should take at least 0.2 seconds for 3 messages at 10/sec
         elapsed = (end_time - start_time).total_seconds()

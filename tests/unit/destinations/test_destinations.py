@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,6 @@ from cod3s_data.core.buffers import OverflowStrategy
 from cod3s_data.core.message import Message
 from cod3s_data.destinations import (
     CollectDestination,
-    ConsoleDestination,
     FileDestination,
     InMemoryDestination,
     RetryStrategy,
@@ -20,8 +20,8 @@ from cod3s_data.sources import SequenceSource
 
 
 def create_message(key: str = "test", value: float = 42.0) -> Message:
-    from datetime import datetime, timezone
-    return Message(key=key, timestamp=datetime.now(timezone.utc), value=value, tags={})
+    from datetime import datetime
+    return Message(key=key, timestamp=datetime.now(UTC), value=value, tags={})
 
 
 class TestInMemoryDestination:
@@ -143,10 +143,10 @@ class TestCollectDestination:
         dest = CollectDestination(broker, "test.channel")
         await dest.start()
 
-        from datetime import datetime, timezone
-        msg1 = Message(key="temp", timestamp=datetime.now(timezone.utc), value=1.0, tags={"sensor": "A"})
-        msg2 = Message(key="temp", timestamp=datetime.now(timezone.utc), value=2.0, tags={"sensor": "B"})
-        msg3 = Message(key="pressure", timestamp=datetime.now(timezone.utc), value=3.0, tags={"sensor": "A"})
+        from datetime import datetime
+        msg1 = Message(key="temp", timestamp=datetime.now(UTC), value=1.0, tags={"sensor": "A"})
+        msg2 = Message(key="temp", timestamp=datetime.now(UTC), value=2.0, tags={"sensor": "B"})
+        msg3 = Message(key="pressure", timestamp=datetime.now(UTC), value=3.0, tags={"sensor": "A"})
 
         await broker.publish("test.channel", msg1)
         await broker.publish("test.channel", msg2)

@@ -7,6 +7,7 @@ or want to integrate with existing Python code.
 """
 
 import asyncio
+
 from cod3s_data.broker.in_memory import InMemoryBroker
 from cod3s_data.destinations.core import ConsoleDestination, InMemoryDestination
 from cod3s_data.sources.test_sources import RandomSource

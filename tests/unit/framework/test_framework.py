@@ -1,7 +1,7 @@
 """Unit tests for framework."""
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -203,8 +203,6 @@ class TestFrameworkPlugins:
     @pytest.mark.asyncio
     async def test_framework_loads_config_plugins(self):
         """Framework loads plugins listed in config.plugins on start()."""
-        register_fn = MagicMock()
-
         config = PipelineConfig(
             plugins=["my.plugin"],
             sources=[],

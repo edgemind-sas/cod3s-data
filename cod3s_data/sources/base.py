@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -139,7 +140,7 @@ class Source(ABC):
         if self._message_count > 0 and self._message_count % 100 == 0:
             metric_msg = Message(
                 key="source.messages_produced",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=self._message_count,
                 tags={"channel": self.channel, "source": self.__class__.__name__},
             )

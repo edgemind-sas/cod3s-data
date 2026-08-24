@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from enum import Enum
+import contextlib
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -19,7 +20,7 @@ from cod3s_data.transformations.base import Transformation
 _logger = structlog.get_logger()
 
 
-class PipelineState(str, Enum):
+class PipelineState(StrEnum):
     """Pipeline lifecycle states."""
 
     IDLE = "idle"
@@ -100,11 +101,11 @@ class Framework:
             self._bridge = create_observatory(config=obs_config)
             self._bridge._framework = self
             self._interactive = obs_config.interactive
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "Observatory requires extra dependencies. "
                 "Install with: pip install cod3s-data[observatory]"
-            )
+            ) from e
 
     def _load_plugins(self) -> list[str]:
         """Load plugins from config and constructor argument.
@@ -223,10 +224,8 @@ class Framework:
         # Cancel the monitor task first
         if self._pipeline_monitor_task and not self._pipeline_monitor_task.done():
             self._pipeline_monitor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._pipeline_monitor_task
-            except asyncio.CancelledError:
-                pass
             self._pipeline_monitor_task = None
 
         # Cancel source tasks
@@ -318,28 +317,22 @@ class Framework:
             return
 
         for source in self.sources:
-            try:
+            with contextlib.suppress(Exception):
                 await self._bridge.on_component_state_change(
                     source._component_id, "source", "none", "created"
                 )
-            except Exception:
-                pass
 
         for transformation in self.transformations:
-            try:
+            with contextlib.suppress(Exception):
                 await self._bridge.on_component_state_change(
                     transformation._component_id, "transformation", "none", "created"
                 )
-            except Exception:
-                pass
 
         for destination in self.destinations:
-            try:
+            with contextlib.suppress(Exception):
                 await self._bridge.on_component_state_change(
                     destination._component_id, "destination", "none", "created"
                 )
-            except Exception:
-                pass
 
     async def start(self) -> None:
         """Start the pipeline."""
@@ -390,12 +383,9 @@ class Framework:
                 pass
             return
 
-        # Wait for all source tasks to complete
-        try:
+        # Wait for all source tasks to complete (graceful cancellation)
+        with contextlib.suppress(asyncio.CancelledError):
             await asyncio.gather(*self._source_tasks)
-        except asyncio.CancelledError:
-            # Graceful cancellation
-            pass
 
     async def stop(self) -> None:
         """Stop the pipeline gracefully."""

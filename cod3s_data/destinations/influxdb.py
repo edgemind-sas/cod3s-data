@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import structlog
@@ -206,10 +207,8 @@ class InfluxDBDestination(Destination):
                     self._error_count += len(batch)
                     if self.dlq_channel:
                         for msg in batch:
-                            try:
+                            with contextlib.suppress(Exception):
                                 await self.broker.publish(self.dlq_channel, msg)
-                            except Exception:
-                                pass
                     return
                 await asyncio.sleep(self._calculate_backoff(attempt))
 

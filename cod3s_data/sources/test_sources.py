@@ -2,8 +2,8 @@
 
 import asyncio
 import random
-from datetime import datetime, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
 from cod3s_data.core.message import Message
@@ -62,7 +62,7 @@ class RandomSource(Source):
 
             yield Message(
                 key=self.key,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=value,
                 tags={},
             )
@@ -123,7 +123,7 @@ class SequenceSource(Source):
 
             yield Message(
                 key=self.key,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=value,
                 tags={"sequence_value": str(value)},
             )

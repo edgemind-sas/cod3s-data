@@ -56,27 +56,24 @@ class TestLoadPlugin:
         """Module without register or register_all raises PluginError."""
         module = types.ModuleType("empty_plugin")
 
-        with patch("cod3s_data.plugins.importlib.import_module", return_value=module):
-            with pytest.raises(PluginError, match="no 'register' or 'register_all'"):
-                load_plugin("empty_plugin", factory)
+        with patch("cod3s_data.plugins.importlib.import_module", return_value=module), pytest.raises(PluginError, match="no 'register' or 'register_all'"):
+            load_plugin("empty_plugin", factory)
 
     def test_non_callable_register_raises_plugin_error(self, factory):
         """Module with non-callable register attribute raises PluginError."""
         module = types.ModuleType("bad_plugin")
         module.register = "not a function"
 
-        with patch("cod3s_data.plugins.importlib.import_module", return_value=module):
-            with pytest.raises(PluginError, match="not callable"):
-                load_plugin("bad_plugin", factory)
+        with patch("cod3s_data.plugins.importlib.import_module", return_value=module), pytest.raises(PluginError, match="not callable"):
+            load_plugin("bad_plugin", factory)
 
     def test_register_that_raises_wraps_in_plugin_error(self, factory):
         """If register() raises, the error is wrapped in PluginError."""
         module = types.ModuleType("failing_plugin")
         module.register = MagicMock(side_effect=RuntimeError("boom"))
 
-        with patch("cod3s_data.plugins.importlib.import_module", return_value=module):
-            with pytest.raises(PluginError, match="register\\(\\) failed: boom"):
-                load_plugin("failing_plugin", factory)
+        with patch("cod3s_data.plugins.importlib.import_module", return_value=module), pytest.raises(PluginError, match="register\\(\\) failed: boom"):
+            load_plugin("failing_plugin", factory)
 
 
 class TestLoadPlugins:
@@ -108,9 +105,8 @@ class TestLoadPlugins:
                 return module_a
             raise ImportError("nope")
 
-        with patch("cod3s_data.plugins.importlib.import_module", side_effect=fake_import):
-            with pytest.raises(PluginError):
-                load_plugins(["plugin_a", "plugin_bad", "plugin_c"], factory)
+        with patch("cod3s_data.plugins.importlib.import_module", side_effect=fake_import), pytest.raises(PluginError):
+            load_plugins(["plugin_a", "plugin_bad", "plugin_c"], factory)
 
     def test_raise_on_error_false_continues_on_failure(self, factory):
         """With raise_on_error=False, skips failed plugins and continues."""

@@ -37,7 +37,7 @@ async def create_breakpoint(body: BreakpointCreate, request: Request) -> dict[st
             component_id=body.component_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"breakpoint_id": bp_id}
 
 
@@ -47,8 +47,8 @@ async def delete_breakpoint(breakpoint_id: str, request: Request) -> None:
     debug = request.app.state.debug_controller
     try:
         debug.breakpoint_evaluator.remove(breakpoint_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Breakpoint not found")
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="Breakpoint not found") from e
 
 
 @router.get("/state")

@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from cod3s_data.core.message import Message
 
@@ -259,7 +259,7 @@ class SubscriptionRegistry:
         """
         patterns = list(self._exact_matches.keys())
 
-        for regex in self._single_wildcards.keys():
+        for regex in self._single_wildcards:
             patterns.append(regex.pattern)
 
         for regex, _ in self._multi_wildcards:

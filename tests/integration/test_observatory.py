@@ -5,7 +5,6 @@ import asyncio
 import pytest
 
 from cod3s_data.config.models import (
-    BrokerConfig,
     DestinationConfig,
     PipelineConfig,
     SourceConfig,

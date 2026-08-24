@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections import OrderedDict
+from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -79,10 +81,8 @@ class ObservatoryBridge:
         try:
             if self._ws is not None:
                 for client_id in list(self._ws._clients.keys()):
-                    try:
+                    with contextlib.suppress(Exception):
                         await self._ws._clients[client_id].close()
-                    except Exception:
-                        pass
                 self._ws._clients.clear()
         except Exception:
             pass
@@ -436,7 +436,7 @@ class ObservatoryBridge:
         edit comes in as an int (``50``). All numeric setpoints/tolerances
         are floats by convention, so the coercion is harmless.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from cod3s_data.core.message import Message
 
@@ -448,7 +448,7 @@ class ObservatoryBridge:
         payload = _coerce_ints_to_floats(payload)
         message = Message(
             key=channel,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             value=payload,
             tags={},
         )

@@ -8,7 +8,7 @@ Target performance requirements:
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -40,7 +40,7 @@ class TestBrokerPerformance:
         for i in range(num_messages):
             msg = Message(
                 key="test",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=i,
             )
             await broker.publish("test.channel", msg)
@@ -77,7 +77,7 @@ class TestBrokerPerformance:
         latencies = []
 
         async def measure_latency(msg: Message) -> None:
-            receive_time = datetime.now(timezone.utc)
+            receive_time = datetime.now(UTC)
             latency_ms = (receive_time - msg.timestamp).total_seconds() * 1000
             latencies.append(latency_ms)
 
@@ -88,7 +88,7 @@ class TestBrokerPerformance:
         for i in range(num_messages):
             msg = Message(
                 key="test",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=i,
             )
             await broker.publish("test.channel", msg)
@@ -106,7 +106,7 @@ class TestBrokerPerformance:
         p99 = latencies[int(len(latencies) * 0.99)]
         avg = sum(latencies) / len(latencies)
 
-        print(f"\nLatency statistics:")
+        print("\nLatency statistics:")
         print(f"  Average: {avg:.2f}ms")
         print(f"  p50: {p50:.2f}ms")
         print(f"  p95: {p95:.2f}ms")
@@ -131,14 +131,10 @@ class TestBrokerPerformance:
 
         # Create subscribers for each channel
         for channel_id in range(num_channels):
+            # cid is bound as a default so each collector counts its own channel
+            async def collector(_msg: Message, cid: int = channel_id) -> None:
+                received_count[cid] += 1
 
-            async def make_collector(cid):
-                async def collector(msg: Message) -> None:
-                    received_count[cid] += 1
-
-                return collector
-
-            collector = await make_collector(channel_id)
             broker.subscribe(f"channel.{channel_id}", collector)
 
         # Publish to all channels concurrently
@@ -148,7 +144,7 @@ class TestBrokerPerformance:
             for i in range(messages_per_channel):
                 msg = Message(
                     key=f"msg_{i}",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     value=i,
                 )
                 await broker.publish(f"channel.{channel_id}", msg)
@@ -163,7 +159,7 @@ class TestBrokerPerformance:
         duration = end_time - start_time
         throughput = total_messages / duration
 
-        print(f"\nConcurrent channels performance:")
+        print("\nConcurrent channels performance:")
         print(f"  Channels: {num_channels}")
         print(f"  Messages per channel: {messages_per_channel:,}")
         print(f"  Total messages: {total_messages:,}")
@@ -190,17 +186,13 @@ class TestBrokerPerformance:
             "logs.**",
         ]
 
-        received_counts = {pattern: 0 for pattern in patterns}
+        received_counts = dict.fromkeys(patterns, 0)
 
         for pattern in patterns:
+            # p is bound as a default so each collector counts its own pattern
+            async def collector(_msg: Message, p: str = pattern) -> None:
+                received_counts[p] += 1
 
-            async def make_collector(p):
-                async def collector(msg: Message) -> None:
-                    received_counts[p] += 1
-
-                return collector
-
-            collector = await make_collector(pattern)
             broker.subscribe(pattern, collector)
 
         # Publish to specific channels
@@ -208,7 +200,7 @@ class TestBrokerPerformance:
         start_time = time.time()
 
         for i in range(num_messages):
-            msg = Message(key="temp", timestamp=datetime.now(timezone.utc), value=i)
+            msg = Message(key="temp", timestamp=datetime.now(UTC), value=i)
             await broker.publish("sensors.temp.room1", msg)
 
         await asyncio.sleep(0.5)
@@ -217,10 +209,10 @@ class TestBrokerPerformance:
         duration = end_time - start_time
         throughput = num_messages / duration
 
-        print(f"\nWildcard matching performance:")
+        print("\nWildcard matching performance:")
         print(f"  Published {num_messages:,} messages in {duration:.2f}s")
         print(f"  Throughput: {throughput:,.0f} msg/s")
-        print(f"  Matched patterns:")
+        print("  Matched patterns:")
         for pattern, count in received_counts.items():
             print(f"    {pattern}: {count} messages")
 
@@ -277,7 +269,7 @@ class TestPipelinePerformance:
 
         throughput = len(messages) / duration
 
-        print(f"\nEnd-to-end pipeline performance:")
+        print("\nEnd-to-end pipeline performance:")
         print(f"  Messages: {len(messages):,}")
         print(f"  Duration: {duration:.2f}s")
         print(f"  Throughput: {throughput:,.0f} msg/s")
@@ -367,7 +359,7 @@ class TestMemoryUsage:
         # Publish many messages
         num_messages = 10_000
         for i in range(num_messages):
-            msg = Message(key="test", timestamp=datetime.now(timezone.utc), value=i)
+            msg = Message(key="test", timestamp=datetime.now(UTC), value=i)
             await broker.publish("test.channel", msg)
 
         # Check history is bounded
@@ -401,7 +393,7 @@ class TestMemoryUsage:
         for i in range(num_messages):
             msg = Message(
                 key=f"test_message_{i}",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value={"data": [i] * 100},  # Array of 100 elements
                 tags=large_tags,
             )
@@ -413,7 +405,7 @@ class TestMemoryUsage:
         duration = end_time - start_time
         throughput = num_messages / duration
 
-        print(f"\nLarge message throughput:")
+        print("\nLarge message throughput:")
         print(f"  Messages: {num_messages:,}")
         print(f"  Duration: {duration:.2f}s")
         print(f"  Throughput: {throughput:,.0f} msg/s")

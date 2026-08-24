@@ -1,8 +1,9 @@
 """Buffer structures for history management and destination buffering."""
 
 import asyncio
+import contextlib
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -84,7 +85,7 @@ class HistoryBuffer:
         """
         if self._ttl:
             # Filter by TTL
-            cutoff = datetime.now(timezone.utc) - self._ttl
+            cutoff = datetime.now(UTC) - self._ttl
             valid = [m for m in self._buffer if m.timestamp >= cutoff]
             # Return newest first
             return list(reversed(valid[-count:]))
@@ -108,7 +109,7 @@ class HistoryBuffer:
     def __len__(self) -> int:
         """Number of messages currently in buffer."""
         if self._ttl:
-            cutoff = datetime.now(timezone.utc) - self._ttl
+            cutoff = datetime.now(UTC) - self._ttl
             return sum(1 for m in self._buffer if m.timestamp >= cutoff)
         return len(self._buffer)
 
@@ -183,18 +184,13 @@ class DestinationBuffer:
 
             elif self._overflow_strategy == OverflowStrategy.DROP_OLDEST:
                 # Remove oldest message
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     self._queue.get_nowait()
                     self._dropped_count += 1
-                except asyncio.QueueEmpty:
-                    pass
 
-                # Add new message
-                try:
+                # Add new message; the queue may have filled again in between
+                with contextlib.suppress(asyncio.QueueFull):
                     self._queue.put_nowait(message)
-                except asyncio.QueueFull:
-                    # Race condition: queue filled again
-                    pass
 
             elif self._overflow_strategy == OverflowStrategy.BLOCK:
                 # Wait until space available (backpressure)
@@ -410,7 +406,7 @@ class Cache:
             key: Cache key
             value: Value to cache
         """
-        self._cache[key] = (value, datetime.now(timezone.utc))
+        self._cache[key] = (value, datetime.now(UTC))
 
     def get(self, key: str) -> Any | None:
         """
@@ -428,11 +424,10 @@ class Cache:
         value, timestamp = self._cache[key]
 
         # Check TTL
-        if self._ttl:
-            if datetime.now(timezone.utc) - timestamp > self._ttl:
-                # Expired
-                del self._cache[key]
-                return None
+        if self._ttl and datetime.now(UTC) - timestamp > self._ttl:
+            # Expired
+            del self._cache[key]
+            return None
 
         return value
 

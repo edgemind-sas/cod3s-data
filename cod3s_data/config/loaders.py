@@ -1,5 +1,6 @@
 """Configuration loaders for COD3S Data Framework."""
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -77,10 +78,8 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         )
 
     if os.getenv("COD3S_BROKER_HISTORY_SIZE") is not None:
-        try:
+        with contextlib.suppress(ValueError):
             config["broker"]["history_size"] = int(os.getenv("COD3S_BROKER_HISTORY_SIZE", "100"))
-        except ValueError:
-            pass
 
     # Pipeline name override
     if os.getenv("COD3S_PIPELINE_NAME") is not None:

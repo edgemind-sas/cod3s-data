@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -103,7 +104,7 @@ class InMemoryBroker(Broker):
         self,
         channel: str,
         message: Message,
-        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,
+        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,  # noqa: ARG002 advisory only, see Broker.publish
     ) -> PublishResult:
         """
         Publish message to channel.
@@ -119,14 +120,15 @@ class InMemoryBroker(Broker):
         if not channel or not channel.strip():
             raise InvalidChannelError("Channel name cannot be empty")
 
-        if channel.startswith("_") and not channel.startswith("_metrics."):
-            # Reserved prefix (only _metrics.* allowed)
-            if not self._enable_metrics:
-                raise InvalidChannelError(
-                    f"Channel '{channel}' uses reserved prefix '_'"
-                )
+        # Reserved prefix (only _metrics.* allowed)
+        if (
+            channel.startswith("_")
+            and not channel.startswith("_metrics.")
+            and not self._enable_metrics
+        ):
+            raise InvalidChannelError(f"Channel '{channel}' uses reserved prefix '_'")
 
-        publish_time = datetime.now(timezone.utc)
+        publish_time = datetime.now(UTC)
 
         # Add to history
         await self._add_to_history(channel, message)
@@ -202,7 +204,7 @@ class InMemoryBroker(Broker):
             if self._enable_metrics:
                 error_msg = Message(
                     key="broker.error_count",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     value=self._error_count,
                     tags={"channel": channel, "error_type": type(e).__name__},
                 )
@@ -269,7 +271,7 @@ class InMemoryBroker(Broker):
         if self._enable_metrics:
             metric_msg = Message(
                 key="broker.active_subscriptions",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=len(self._subscriptions),
                 tags={},
             )
@@ -293,7 +295,7 @@ class InMemoryBroker(Broker):
         """
         # Find matching channels
         matching_channels = [
-            ch for ch in self._history.keys() if self._matches_pattern(pattern, ch)
+            ch for ch in self._history if self._matches_pattern(pattern, ch)
         ]
 
         for channel in matching_channels:
@@ -308,11 +310,9 @@ class InMemoryBroker(Broker):
 
             # Replay messages (newest first from buffer, but we reverse for oldest-first replay)
             for message in reversed(messages):
-                try:
+                # Errors during history replay are silently ignored
+                with contextlib.suppress(Exception):
                     await callback(message)
-                except Exception:
-                    # Errors during history replay are silently ignored
-                    pass
 
     def _matches_pattern(self, pattern: str, channel: str) -> bool:
         """
@@ -366,7 +366,7 @@ class InMemoryBroker(Broker):
         if self._enable_metrics:
             metric_msg = Message(
                 key="broker.active_subscriptions",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 value=len(self._subscriptions),
                 tags={},
             )

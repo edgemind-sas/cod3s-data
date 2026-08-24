@@ -1,12 +1,11 @@
 """Unit tests for InMemoryBroker."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from cod3s_data.broker import (
-    DeliveryGuarantee,
     HistoryMode,
     InMemoryBroker,
     InvalidChannelError,
@@ -19,7 +18,7 @@ def create_message(key: str = "temp", value: float = 42.0, **kwargs) -> Message:
     """Helper to create test messages."""
     return Message(
         key=key,
-        timestamp=kwargs.get("timestamp", datetime.now(timezone.utc)),
+        timestamp=kwargs.get("timestamp", datetime.now(UTC)),
         value=value,
         tags=kwargs.get("tags", {}),
     )
@@ -40,7 +39,7 @@ class TestBasicPublishSubscribe:
             received.append(msg)
 
         # Subscribe
-        handle = broker.subscribe("test.channel", callback)
+        broker.subscribe("test.channel", callback)
 
         # Publish
         msg = create_message()
@@ -547,7 +546,7 @@ class TestMetrics:
         broker.subscribe("test.channel", callback)
 
         # Publish some messages
-        for i in range(3):
+        for _ in range(3):
             await broker.publish("test.channel", create_message())
 
         await asyncio.sleep(0.01)

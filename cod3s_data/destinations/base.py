@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -83,12 +84,10 @@ class Destination(ABC):
 
     async def _enqueue_message(self, message: Message) -> None:
         if self._bridge is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._bridge.on_message_received(
                     self._component_id, "destination", message
                 )
-            except Exception:
-                pass
         await self.buffer.put(message)
 
     async def _writer_loop(self) -> None:
@@ -98,7 +97,7 @@ class Destination(ABC):
                 try:
                     message = await asyncio.wait_for(self.buffer.get(), timeout=0.1)
                     batch.append(message)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if batch:
                         await self._write_batch_with_retry(batch)
                         batch = []
@@ -120,7 +119,7 @@ class Destination(ABC):
                 if len(batch) >= self.batch_size:
                     await self._write_batch_with_retry(batch)
                     batch = []
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
         if batch:
             await self._write_batch_with_retry(batch)
@@ -131,10 +130,8 @@ class Destination(ABC):
             if not success:
                 self._error_count += 1
                 if self.dlq_channel:
-                    try:
+                    with contextlib.suppress(Exception):
                         await self.broker.publish(self.dlq_channel, message)
-                    except Exception:
-                        pass
 
     async def _write_with_retry(self, message: Message) -> bool:
         for attempt in range(self.retry_attempts):

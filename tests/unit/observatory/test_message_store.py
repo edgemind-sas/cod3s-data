@@ -1,6 +1,5 @@
 """Tests for MessageDetailStore and JourneyStore."""
 
-import pytest
 
 from cod3s_data.observatory.message_store import (
     JourneyStep,

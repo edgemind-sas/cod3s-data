@@ -12,7 +12,6 @@ router = APIRouter()
 @router.get("/topology")
 async def get_topology(request: Request) -> dict[str, Any]:
     """Return pipeline topology as nodes and edges."""
-    bridge = request.app.state.bridge
     # Build topology from buffered component state events
     buffer = request.app.state.buffer
     from cod3s_data.observatory.buffer import EventType

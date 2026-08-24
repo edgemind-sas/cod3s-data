@@ -1,11 +1,8 @@
 """Unit tests for observability."""
 
 import asyncio
-import logging
-from io import StringIO
 
 import pytest
-import structlog
 
 from cod3s_data.broker.in_memory import InMemoryBroker
 from cod3s_data.core.message import Message

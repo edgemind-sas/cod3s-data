@@ -6,7 +6,7 @@ subscribe, transform, and route them through the pipeline.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
@@ -69,7 +69,7 @@ def emit_metric(
     # Create metric message
     metric_msg = Message(
         key=metric_name,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         value=value,
         tags=tags or {},
     )
@@ -114,7 +114,7 @@ async def emit_metric_async(
     # Create metric message
     metric_msg = Message(
         key=metric_name,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         value=value,
         tags=tags or {},
     )

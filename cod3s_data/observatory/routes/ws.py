@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -40,7 +40,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.send_json({
             "type": "connected",
             "id": f"evt-{client_id}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "payload": connected_payload,
         })
 
@@ -65,7 +65,7 @@ async def _handle_command(
     """Dispatch a WebSocket command and return a response."""
     cmd_type = data.get("type", "")
     payload = data.get("payload", {})
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # Pipeline control commands
     if cmd_type.startswith("pipeline."):
