@@ -25,7 +25,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { MessageDetail, JourneyStep, JourneyTreeNode } from '@/types'
+import type { MessageDetail, JourneyTreeNode } from '@/types'
 import JourneyBranch from './JourneyBranch.vue'
 
 const props = defineProps<{ detail: MessageDetail }>()

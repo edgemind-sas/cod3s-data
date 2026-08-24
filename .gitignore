@@ -61,6 +61,12 @@ site/
 !tests/fixtures/*.csv
 !tests/fixtures/*.json
 !tests/fixtures/*.jsonl
+# The '*.json' rule above is aimed at sample data, but it also swallows every
+# JSON config file in the tree. Frontend tooling config must stay versioned:
+# without the lockfile, CI has no reproducible 'npm ci'.
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
 
 # Frontend
 frontend/node_modules/
