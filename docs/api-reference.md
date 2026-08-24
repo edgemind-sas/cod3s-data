@@ -229,6 +229,13 @@ source = CSVWatchSource(
 - `key_column`, `timestamp_column`, `value_column`, `value_columns`, `tag_columns`,
   `delimiter`, `encoding`, `has_header` - Same meaning as `CSVSource`
 
+Unlike `CSVSource`, which reads through polars and gets typed columns, this
+source reads with `csv.reader` and gets strings. Any cell that parses as a
+number is converted, so values reach numeric transformations as numbers;
+anything else is left as a string. A column of zero-padded identifiers is
+therefore read as numbers — carry it in `tag_columns`, which are always
+strings, rather than in `value_columns`.
+
 ### DirectoryWatchSource
 
 Watch a directory and emit one message per new file. Detection is by filename:

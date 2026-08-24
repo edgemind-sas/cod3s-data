@@ -1,265 +1,91 @@
-# 🎉 START HERE - Your Framework is Ready!
+# Start here
 
-## ✅ What Just Happened
+COD3S Data is an AsyncIO pub/sub framework for real-time sensor data: sources
+publish messages to channels, transformations process them between channels,
+destinations consume them. Everything else is detail.
 
-You successfully built **COD3S Data Framework v1.0** - a production-ready data streaming framework!
+This page is a map. It tells you where to go, not how things work.
 
-**Stats:**
-- 📝 **1,209 lines of code** (production)
-- ✅ **213 tests passing** (86% coverage)
-- 📚 **Complete documentation**
-- 🐳 **Docker support**
-- 🖥️  **CLI tool**
-- 🐍 **Python API**
-
-## 🚀 Try It Right Now (3 commands)
+## Run something in the next minute
 
 ```bash
-# 1. YAML Pipeline (automated)
-uv run cod3s-data run my_first_pipeline.yaml
-
-# 2. Python Pipeline (programmatic)
-uv run python my_python_pipeline.py
-
-# 3. Example Pipeline (sensor monitoring)
-uv run python examples/sensor_monitoring.py
-```
-
-## 📁 Important Files You Created
-
-### Your Custom Files
-- **`my_first_pipeline.yaml`** - Temperature monitoring with alerts
-- **`my_python_pipeline.py`** - Python API example
-
-### Framework Files
-```
-cod3s-data/
-├── cod3s_data/          # Your framework code
-│   ├── cli.py          # Command-line interface
-│   ├── framework.py    # Main coordinator
-│   ├── broker/         # Pub/sub message broker
-│   ├── sources/        # Data sources
-│   ├── destinations/   # Data sinks
-│   └── transformations/# Message processing
-│
-├── examples/           # 6 ready-to-run examples
-│   ├── *.py           # Python examples
-│   └── *.yaml         # YAML configs
-│
-├── docs/              # Complete documentation
-│   ├── quickstart.md
-│   ├── api-reference.md
-│   └── installation.md
-│
-├── tests/             # 213 tests
-│   ├── unit/         # 194 tests
-│   ├── integration/  # 11 tests
-│   └── performance/  # 8 tests
-│
-└── START_HERE.md      # ← You are here!
-```
-
-## 🎯 Your Next Step - Pick ONE
-
-### Option A: Learn by Modifying (Recommended)
-
-Edit `my_first_pipeline.yaml` and experiment:
-
-```bash
-# 1. Open in editor
-nano my_first_pipeline.yaml
-
-# 2. Try changing these:
-#    - Change min_value: 18.0 to min_value: 15.0
-#    - Change rate: 5.0 to rate: 10.0
-#    - Add another transformation
-
-# 3. Validate your changes
-uv run cod3s-data validate my_first_pipeline.yaml
-
-# 4. Run it
-uv run cod3s-data run my_first_pipeline.yaml
-```
-
-### Option B: Build Something Real
-
-Use it for actual sensor monitoring:
-
-```yaml
-# your_project.yaml
-name: my_real_project
-
-sources:
-  - type: csv  # or file
-    channel: production.data
-    params:
-      file_path: your_sensor_data.csv
-
-transformations:
-  - type: filter
-    input_channels: production.data
-    output_channel: critical.alerts
-    params:
-      predicate_code: "lambda msg: msg.value > 100"
-
-destinations:
-  - type: file
-    channel_pattern: critical.alerts
-    params:
-      file_path: alerts.jsonl
-```
-
-### Option C: Extend the Framework
-
-Add your own source/destination:
-
-```python
-# my_sources.py
-from cod3s_data.sources.base import Source
-from cod3s_data.core.message import Message
-
-class MyCustomSource(Source):
-    async def produce(self):
-        while self._running:
-            # Your custom logic here
-            data = await fetch_from_api()
-            yield Message(
-                key="custom",
-                timestamp=datetime.now(timezone.utc),
-                value=data
-            )
-```
-
-## 📚 Documentation Quick Links
-
-1. **First time?** → Read `docs/quickstart.md` (5 min tutorial)
-2. **Python API?** → Read `docs/api-reference.md` (complete reference)
-3. **Examples?** → Check `examples/README.md` (6 examples explained)
-4. **Getting started?** → Read `GETTING_STARTED.md` (comprehensive guide)
-
-## 🔧 Common Commands
-
-```bash
-# Development
-uv run pytest                    # Run all tests
-uv run pytest tests/unit/        # Just unit tests
-uv run mypy cod3s_data/          # Type checking
-uv run ruff check .              # Linting
-uv run ruff format .             # Auto-format
-
-# Using the framework
-uv run cod3s-data validate FILE.yaml   # Check config
-uv run cod3s-data run FILE.yaml        # Run pipeline
-uv run python my_pipeline.py           # Python API
-
-# Examples
-uv run python examples/simple_pipeline.py
-uv run python examples/sensor_monitoring.py
-uv run python examples/data_transformation.py
-```
-
-## 💡 Quick Tips
-
-1. **Always validate first**: `cod3s-data validate` catches errors before running
-2. **Use `--log-level DEBUG`** to see what's happening
-3. **Start simple**: Modify examples rather than starting from scratch
-4. **Check metrics**: Subscribe to `_metrics.**` to see pipeline stats
-5. **Test with inmemory**: Use `type: inmemory` destination for testing
-
-## 🆘 If Something Doesn't Work
-
-```bash
-# 1. Check installation
-uv run cod3s-data --version
-
-# 2. Run tests to verify
-uv run pytest tests/unit/
-
-# 3. Try a simple example
+uv pip install -e ".[dev]"
 uv run cod3s-data run examples/simple_pipeline.yaml
-
-# 4. Enable debug logging
-uv run cod3s-data run FILE.yaml --log-level DEBUG --verbose
 ```
 
-## 🎓 Learning Resources
-
-**Order matters!** Follow this path:
-
-1. ✅ **Run `my_first_pipeline.yaml`** (you can do this now!)
-2. 📖 Read `docs/quickstart.md`
-3. 👀 Study `examples/simple_pipeline.py`
-4. 🔬 Modify one of the examples
-5. 🏗️ Build your own pipeline
-6. 📚 Reference `docs/api-reference.md` as needed
-
-## 🚀 Production Deployment
-
-When you're ready to deploy:
+Ten numbers, printed to the console. Now something with more moving parts:
 
 ```bash
-# Option 1: Direct installation
-uv pip install .
-
-# Option 2: Docker
-docker build -t my-pipeline .
-docker run my-pipeline run config.yaml
-
-# Option 3: As a library
-# Import and use in your Python project
-from cod3s_data import Framework
+uv pip install -e ".[observatory]"
+uv run cod3s-data run examples/print_job_dynamic.yaml --observatory
 ```
 
-## 📊 What You Built
+Open <http://localhost:8765>. Two simulated temperature sensors, two alarms
+whose setpoints come from `examples/jobs/PLA.yaml`, and a UI showing the
+topology live. Change a setpoint without stopping the pipeline:
 
-**Performance:**
-- ⚡ ~7ms average latency
-- 📈 5,000+ msg/s throughput
-- 💾 <512MB memory usage
-
-**Features:**
-- ✅ Pub/sub message broker
-- ✅ Wildcard channel patterns
-- ✅ Stateless & stateful transformations
-- ✅ Dead letter queues
-- ✅ Metrics & observability
-- ✅ YAML & Python configuration
-- ✅ Retry logic & error handling
-
-## 🎯 Your Mission (if you choose to accept)
-
-**Next 5 minutes:**
 ```bash
-uv run cod3s-data run my_first_pipeline.yaml
+curl -X POST http://localhost:8765/api/params/params.alarm.extruder.setpoint \
+     -H 'Content-Type: application/json' -d '{"value": 215}'
 ```
 
-**Next 30 minutes:**
-- Read `docs/quickstart.md`
-- Run all examples in `examples/`
-- Modify `my_first_pipeline.yaml`
+## Where to go next
 
-**Next hour:**
-- Create a pipeline for YOUR use case
-- Add custom transformations
-- Set up real data sources
+| If you want to… | Read |
+|---|---|
+| Write your first pipeline | [docs/quickstart.md](docs/quickstart.md) |
+| Solve a concrete problem | [GETTING_STARTED.md](GETTING_STARTED.md) — task-oriented recipes |
+| Look up a component or a parameter | [docs/api-reference.md](docs/api-reference.md) |
+| Watch a pipeline while it runs | [docs/observatory.md](docs/observatory.md) |
+| See working pipelines | [examples/README.md](examples/README.md) — seven of them |
+| Install on Windows | [README_WINDOWS.md](README_WINDOWS.md) |
 
-**Next day:**
-- Write tests for your pipeline
-- Deploy to production
-- Share with your team!
+The [specifications](docs/specifications/) are the original design documents.
+They describe the framework as it was designed in January and February 2026 and
+have not tracked the code since; read them for intent, not for behaviour.
 
----
+## Where the code is
 
-## 🎉 You Did It!
+```
+cod3s_data/
+├── core/            Message, buffers, subscription registry
+├── broker/          In-memory pub/sub, wildcard channels
+├── sources/         Produce messages      → sources/base.py:Source
+├── transformations/ Process messages      → transformations/base.py:Transformation
+├── destinations/    Consume messages      → destinations/base.py:Destination
+├── config/          Pydantic models, YAML loading, ComponentFactory
+├── observatory/     Web UI backend (FastAPI + WebSocket)
+├── observability/   Structured logging, metrics as messages
+├── framework.py     Orchestrator and lifecycle
+└── cli.py           cod3s-data run / validate
 
-You built a complete, production-ready data streaming framework from scratch.
+frontend/            Observatory UI (Vue 3, Vuetify, Vue Flow)
+examples/            Runnable pipelines, Python and YAML
+tests/               unit / integration / performance
+```
 
-**Now go build something amazing with it!** 🚀
+A component's `type:` name in YAML is resolved by the registry in
+`config/factory.py`. That registry is the authority on what exists; the
+[type table](docs/api-reference.md#component-type-names) mirrors it.
 
-Questions? Check:
-- `GETTING_STARTED.md` - Comprehensive guide
-- `docs/` - Full documentation
-- `examples/` - Working examples
-- Tests in `tests/` - See how it works
+## Working on the framework
 
-Happy streaming! 🌊📊
+```bash
+uv run pytest                        # the suite
+uv run ruff check .                  # lint
+uv run ruff format .                 # format
+uv run mypy cod3s_data/              # types, strict
+```
+
+All four run in CI on every merge request, and all four are expected to be
+clean. If one is not, that is a regression rather than a known state.
+
+The Observatory UI is built separately:
+
+```bash
+cd frontend && npm ci && npm run build
+cd frontend && npm run deploy        # copies into cod3s_data/observatory/static/
+```
+
+`npm run deploy` skips the typecheck that `npm run build` runs. Build before
+deploying.
