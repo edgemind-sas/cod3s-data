@@ -5,8 +5,10 @@ reasoning behind it, and — where the code has since diverged — what actually
 happens today.
 
 These decisions were taken in January and February 2026, when the framework was
-designed. They were re-checked against the code on 2026-08-24; the four marked
-**⚠ diverged** did not survive that check.
+designed. They were re-checked against the code on 2026-08-24; four did not
+survive that check. Three are still marked **⚠ diverged** and tracked in the
+[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues); the
+fourth — the frontend missing from the wheel — has since been fixed.
 
 For *what* a component does, read the [API reference](api-reference.md). This
 page is about *why*.
@@ -170,24 +172,31 @@ Either the performance argument did not hold in practice and the decision was
 quietly reversed, or the reversal was accidental. Worth settling before anyone
 pushes the timeline to high message rates.
 
-### ⚠ Bundle the built frontend in the Python package — *diverged*
+### Bundle the built frontend in the Python package
 
-**Decided:** ship the pre-built UI inside the wheel, so
+Ship the pre-built UI inside the wheel, so
 `pip install 'cod3s-data[observatory]'` is a single command with no Node.js,
 works offline in industrial environments, and cannot drift out of version with
 its backend.
 
-**Today:** it is not shipped. `pyproject.toml` declares no `package-data`, there
-is no `MANIFEST.in`, and `cod3s_data/observatory/static/` is gitignored.
-Building a wheel produces 60 files, **none** of them from `static/`.
+This was decided in February and only implemented in August: for six months
+`pyproject.toml` declared no `package-data`, so a wheel carried 60 files and
+none of the UI. The failure was silent — `create_app()` mounts the static
+directory only when it exists and is non-empty, so an installed package served
+a working REST and WebSocket API and 404'd every page — and invisible from a
+clone, where `npm run deploy` has populated the directory.
 
-The failure is silent: `create_app()` only mounts the static directory when it
-exists and is non-empty, so an installed package serves a working REST and
-WebSocket API and 404s the UI. Anyone working from a clone after
-`npm run deploy` sees a functioning Observatory and has no reason to suspect
-this.
+**How it holds now.** The built artifact is versioned in
+`cod3s_data/observatory/static/` rather than gitignored, and `package-data`
+ships it. Two CI jobs keep it honest: `package` builds a wheel and fails if
+`index.html` is missing from it, and `frontend` rebuilds the UI and fails if the
+committed artifact no longer matches the sources.
 
-Fixing it means deciding how the artifact is produced at build time — commit
-it, build it in CI before packaging, or use a build hook — which is a packaging
-decision, not a documentation one. Tracked as
-[issue #1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1).
+Versioning a build artifact is a real cost — every frontend change produces a
+binary diff — and it was accepted because it is what makes the wheel buildable
+by anyone, anywhere, with no Node toolchain. That property is the one that
+failed.
+
+Related: `@mdi/font` declares four font formats and Vite emitted all four, 3.5 MB
+of the 4.9 MB bundle. A `vite.config.ts` plugin now keeps woff2 alone, which
+every browser since about 2015 supports; the artifact is 1.8 MB.

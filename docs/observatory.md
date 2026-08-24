@@ -300,15 +300,22 @@ the message `Debug mode is not enabled`.
 ## Rebuilding the UI
 
 The frontend lives in `frontend/` (Vue 3, Vuetify, Vue Flow) and is served from
-`cod3s_data/observatory/static/`, which is a build artifact and not versioned.
+`cod3s_data/observatory/static/`.
 
 ```bash
 cd frontend
 npm ci
-npm run build     # typecheck (vue-tsc) + bundle
+npm run build     # typecheck (vue-tsc) + bundle into dist/
 npm run deploy    # bundle and copy into cod3s_data/observatory/static/
 npm run dev       # dev server, proxying /api and /ws to 127.0.0.1:8765
 ```
 
-Note that `npm run deploy` skips the typecheck. Run `npm run build` before
-deploying, or let CI do it.
+**The built artifact is versioned**, because it is what ships inside the wheel —
+see [architecture.md](architecture.md#bundle-the-built-frontend-in-the-python-package).
+So a frontend change is not finished until `npm run deploy` has run and the
+result is committed. CI rebuilds the UI and fails if the committed artifact no
+longer matches the sources, and separately builds a wheel and fails if the UI is
+missing from it.
+
+Note that `npm run deploy` skips the typecheck that `npm run build` runs. Build
+before deploying.

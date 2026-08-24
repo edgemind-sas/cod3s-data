@@ -36,6 +36,8 @@ cd frontend && npm run dev           # dev server, proxies /api and /ws to :8765
 cd frontend && npm run build         # vue-tsc typecheck + vite build
 cd frontend && npm run deploy        # build + copy into cod3s_data/observatory/static/
                                      # NOTE: deploy skips the typecheck — build first
+                                     # static/ is VERSIONED (it ships in the wheel):
+                                     # deploy and commit it with any frontend change
 ```
 
 ## Architecture
@@ -103,9 +105,17 @@ separate metrics system.
 
 ## Working here
 
+Work on a branch and open a merge request; do not commit to `main` directly.
+The pipeline only fires on a merge request, on `main`, or on a tag — pushing a
+branch on its own runs nothing, so the MR is what gets the change tested before
+it lands.
+
 Keep `ruff check`, `ruff format --check`, `mypy` and `pytest` clean rather than
-adding ignores — CI runs all four on merge requests, `main` and tags
-(`.gitlab-ci.yml`).
+adding ignores — CI runs all four, plus the frontend build and the wheel
+packaging check (`.gitlab-ci.yml`).
+
+MR descriptions are written in French, but a closing keyword must be in English
+to work: `Closes #12`, never « Ferme #12 ».
 
 Before documenting behaviour, verify it against the code or by running it. The
 documentation drifted badly once and was rebuilt with scripted checks; the
@@ -113,8 +123,7 @@ useful habit is to instantiate a pipeline through the real `ComponentFactory`
 rather than trusting that a config validates.
 
 Read `BACKLOG.md` before assuming something is missing by accident — it indexes
-the issue tracker, where the known gaps are recorded, including the wheel not
-shipping the Observatory UI (#1).
+the issue tracker, where the known gaps are recorded.
 
 `docs/architecture.md` records why the framework is shaped this way, and the
-four places the code has diverged from its own design decisions.
+three places the code still diverges from its own design decisions.

@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+dist-wheel/
 *.py[cod]
 *$py.class
 *.so
@@ -73,7 +74,9 @@ site/
 # Frontend
 frontend/node_modules/
 frontend/dist/
-cod3s_data/observatory/static/
+# cod3s_data/observatory/static/ is deliberately NOT ignored: the built UI ships
+# inside the wheel, so it has to be versioned. CI rebuilds it and fails if the
+# committed artifact no longer matches the sources.
 
 # Logs
 *.log

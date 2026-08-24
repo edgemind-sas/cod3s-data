@@ -13,14 +13,14 @@ cleanup recovering from.
 
 | # | | |
 |---|---|---|
-| [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) | An installed package has no Observatory UI | `défaut` `empaquetage` |
 | [#2](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/2) | `msgspec` is a required dependency, imported nowhere | `défaut` `empaquetage` |
 | [#3](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/3) | The pandas fallback cannot run on a clean install | `défaut` `empaquetage` |
 | [#4](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/4) | `observatory/models/` is dead code | `défaut` |
 | [#5](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/5) | The timeline renders SVG where canvas was decided | `défaut` |
 
-#1 is the one to read first: `pip install 'cod3s-data[observatory]'` gives a
-working API and a 404 on every page, and it is invisible from a clone.
+[#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
+package having no Observatory UI — is fixed: the built artifact is versioned and
+declared as `package-data`, and two CI jobs keep it that way.
 
 ## Tests and CI
 

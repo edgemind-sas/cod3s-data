@@ -58,6 +58,12 @@ cod3s-data = "cod3s_data.cli:main"
 where = ["."]
 include = ["cod3s_data*"]
 
+# The built Observatory UI. Without this, setuptools ships only .py files and
+# `pip install 'cod3s-data[observatory]'` serves a 404 on every page while the
+# REST and WebSocket APIs work — which is how the omission went unnoticed.
+[tool.setuptools.package-data]
+cod3s_data = ["observatory/static/**/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
