@@ -470,19 +470,14 @@ class CSVWatchSource(Source):
         else:
             timestamp = datetime.now(UTC)
 
-        # Extract value
+        # Extract value. csv.reader yields strings, so numeric-looking cells are
+        # converted here; polars already does it for CSVSource. Both branches
+        # convert, otherwise a value_columns stream reaches numeric transforms as
+        # strings and they drop every message without saying so.
         if self.value_columns:
-            value: Any = {col: row[col] for col in self.value_columns if col in row}
+            value: Any = {col: _maybe_float(row[col]) for col in self.value_columns if col in row}
         else:
-            raw = row.get(self.value_column)
-            # Try to convert to float for numeric values
-            if raw is not None:
-                try:
-                    value = float(raw)
-                except (ValueError, TypeError):
-                    value = raw
-            else:
-                value = raw
+            value = _maybe_float(row.get(self.value_column))
 
         # Extract tags
         tags = {
@@ -490,6 +485,16 @@ class CSVWatchSource(Source):
         }
 
         return Message(key=key, timestamp=timestamp, value=value, tags=tags)
+
+
+def _maybe_float(raw: Any) -> Any:
+    """Return ``raw`` as a float when it looks numeric, unchanged otherwise."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return raw
 
 
 class DirectoryWatchSource(Source):

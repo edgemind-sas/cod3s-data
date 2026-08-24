@@ -1432,3 +1432,76 @@ class TestSourceIntegration:
         assert channel2_received[0].value == 10
 
         await broker.stop()
+
+
+class TestCSVWatchSourceNumericCoercion:
+    """value_columns must yield numbers, like value_column and like CSVSource.
+
+    csv.reader hands back strings. The single-column branch converted them, the
+    value_columns branch did not, so a multi-column stream reached numeric
+    transforms as strings — and those return None for a non-numeric value, so
+    every message was dropped with no error anywhere.
+    """
+
+    async def test_value_columns_are_numbers(self, tmp_path):
+        csv_file = tmp_path / "t.csv"
+        csv_file.write_text(
+            "timestamp,extruder,bed,state\n2026-08-24T10:00:00+00:00,210.5,60,heating\n"
+        )
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+
+        async def collect(msg: Message) -> None:
+            received.append(msg)
+
+        broker.subscribe("t", collect)
+
+        source = CSVWatchSource(
+            broker,
+            "t",
+            file_path=csv_file,
+            poll_interval=0.05,
+            value_columns=["extruder", "bed", "state"],
+        )
+        # start() runs the poll loop, so it goes in a task (as the other
+        # CSVWatchSource tests here do) rather than being awaited directly.
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.2)
+        await source.stop()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await broker.stop()
+
+        assert len(received) == 1
+        # numeric cells become floats; a non-numeric one is left alone
+        assert received[0].value == {"extruder": 210.5, "bed": 60.0, "state": "heating"}
+
+    async def test_single_value_column_still_numeric(self, tmp_path):
+        csv_file = tmp_path / "t.csv"
+        csv_file.write_text("timestamp,value\n2026-08-24T10:00:00+00:00,42.5\n")
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+
+        async def collect(msg: Message) -> None:
+            received.append(msg)
+
+        broker.subscribe("t", collect)
+
+        source = CSVWatchSource(broker, "t", file_path=csv_file, poll_interval=0.05)
+        # start() runs the poll loop, so it goes in a task (as the other
+        # CSVWatchSource tests here do) rather than being awaited directly.
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.2)
+        await source.stop()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await broker.stop()
+
+        assert len(received) == 1
+        assert received[0].value == 42.5
