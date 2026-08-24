@@ -44,6 +44,28 @@ COD3S Data Framework v1.0.0
 
 ## Optional Dependencies
 
+### Observatory (Web UI)
+
+```bash
+uv pip install "cod3s-data[observatory]"
+```
+
+Adds FastAPI, uvicorn and websockets, and enables the Observatory UI served at
+<http://localhost:8765>.
+
+### InfluxDB Destination
+
+```bash
+uv pip install "cod3s-data[influxdb]"
+```
+
+Adds `influxdb-client[async]`, required by the `influxdb` destination. A local
+server for development:
+
+```bash
+docker compose -f docker-compose.influxdb.yml up -d
+```
+
 ### Development Tools
 
 For development, install with dev dependencies:

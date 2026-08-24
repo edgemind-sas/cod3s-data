@@ -120,6 +120,9 @@ Sources generate or read data and publish to channels:
 - **random**: Random values
 - **file**: Read from JSON/JSONL files
 - **csv**: Read from CSV files
+- **csv_watch**: Follow a CSV file as it is written
+- **directory_watch**: Emit a message per new file in a directory
+- **param_file**: Publish a YAML/JSON job file as parameter messages
 
 ### Channels
 
@@ -133,7 +136,12 @@ Channels route messages from sources to destinations:
 Transformations process messages:
 - **filter**: Keep messages matching a predicate
 - **map**: Transform message values
-- **aggregate**: Aggregate messages over windows
+- **aggregate**: Aggregate messages over tumbling windows
+- **unpack**: Explode a dict-valued message into one message per key
+- **throttle**: Rate-limit a stream, globally or per key
+- **moving_average** / **median_filter**: Sliding-window smoothing, per key
+- **deviation_filter**: Reject or clip values that stray from a setpoint
+- **alarm** / **relative_alarm**: Threshold and setpoint alarms, emitted on state change only
 
 ### Destinations
 
@@ -142,6 +150,24 @@ Destinations consume messages:
 - **file**: Write to files
 - **inmemory**: Store in memory (for testing)
 - **collect**: Collect messages with assertion helpers (for testing)
+- **influxdb**: Write time-series points to InfluxDB 2.x
+
+Every parameter of every component is listed in the
+[API Reference](api-reference.md#component-type-names).
+
+### Dynamic Parameters
+
+A component parameter can be read from a channel instead of being fixed in the
+file, which makes it editable while the pipeline runs:
+
+```yaml
+params:
+  max_value:
+    ref: params.temperature.max
+    default: 30.0
+```
+
+See [Dynamic parameters](api-reference.md#dynamic-parameters-paramref).
 
 ## Using Plugins
 
@@ -331,8 +357,7 @@ Options:
 
 - Explore [Example Pipelines](../examples/)
 - Read the [API Reference](api-reference.md)
-- Learn about [Custom Components](custom-components.md)
-- Check out [Best Practices](best-practices.md)
+- Write your own components with the [plugin system](api-reference.md#writing-a-plugin)
 
 ## Getting Help
 

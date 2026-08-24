@@ -186,6 +186,109 @@ source = CSVSource(
 )
 ```
 
+**Parameters:**
+- `file_path: str | Path` - Path to CSV file
+- `key_column: str = "key"` - Column holding `message.key`
+- `timestamp_column: str = "timestamp"` - Column holding `message.timestamp`
+- `value_column: str = "value"` - Column holding a scalar `message.value`
+- `value_columns: list[str] | None = None` - Use several columns; `message.value` becomes a dict
+- `tag_columns: list[str] | None = None` - Columns to carry as `message.tags`
+- `exclude_columns: list[str] | None = None` - Columns to ignore entirely
+- `column_mapping: dict[str, str] | None = None` - Rename columns before mapping (`{"T0": "extruder"}`)
+- `pack_remaining_as_value: bool = False` - Pack every column not otherwise used into a dict value
+- `default_key: str | None = None` - Fixed key for every row, when the file has no key column
+- `default_tags: dict[str, str] | None = None` - Tags added to every message
+- `timestamp_mode: str = "iso"` - `"iso"` or `"epoch"` (seconds since epoch)
+- `timestamp_microseconds_column: str | None = None` - Column adding sub-second precision to an epoch timestamp
+- `rebase_timestamps: bool = False` - Shift the whole file so its first row lands at start time
+- `delimiter: str = ","`, `encoding: str = "utf-8"`, `skip_rows: int = 0`, `has_header: bool = True`, `max_rows: int | None = None`
+- `replay: bool = False` - Emit rows in temporal order, honouring the gaps between timestamps
+- `speed_factor: float = 1.0` - Replay speed multiplier (`2.0` = twice as fast)
+
+### CSVWatchSource
+
+Follow a CSV file that is still being written (REALTIME mode). Reads the whole
+file on start, then polls for appended lines.
+
+```python
+from cod3s_data.sources.file_sources import CSVWatchSource
+
+source = CSVWatchSource(
+    broker=broker,
+    channel="sensors.live",
+    file_path="/var/log/printer/telemetry.csv",
+    poll_interval=0.5,
+    value_columns=["extruder", "bed"],
+    tag_columns=["printer_id"],
+)
+```
+
+**Parameters:**
+- `file_path: str | Path` - File to follow
+- `poll_interval: float = 1.0` - Seconds between polls
+- `key_column`, `timestamp_column`, `value_column`, `value_columns`, `tag_columns`,
+  `delimiter`, `encoding`, `has_header` - Same meaning as `CSVSource`
+
+### DirectoryWatchSource
+
+Watch a directory and emit one message per new file. Detection is by filename:
+the source compares the set of names between polls.
+
+```python
+from cod3s_data.sources.file_sources import DirectoryWatchSource
+
+source = DirectoryWatchSource(
+    broker=broker,
+    channel="jobs.incoming",
+    directory="/var/spool/gcode",
+    glob_pattern="*.gcode",
+    poll_interval=2.0,
+    emit_existing=False,
+)
+```
+
+**Parameters:**
+- `directory: str | Path` - Directory to watch
+- `glob_pattern: str = "*"` - Filter, e.g. `"*.csv"`
+- `poll_interval: float = 1.0` - Seconds between polls
+- `emit_existing: bool = False` - Also emit files already present at startup
+
+### ParamFileSource
+
+Publish the contents of a YAML/JSON file as parameter messages, one per entry.
+Each parameter is published on its own sub-channel `{channel}.{key}`, which is
+what a [`ParamRef`](#dynamic-parameters-paramref) subscribes to.
+
+```python
+from cod3s_data.sources.param_file import ParamFileSource
+
+source = ParamFileSource(
+    broker=broker,
+    channel="params",
+    file_path="jobs/PLA.yaml",
+)
+```
+
+Given `jobs/PLA.yaml`:
+
+```yaml
+extruder:
+  setpoint: 210.0
+  tolerance: 5.0
+bed:
+  setpoint: 60.0
+```
+
+the source publishes `params.extruder.setpoint`, `params.extruder.tolerance`
+and `params.bed.setpoint`.
+
+**Parameters:**
+- `file_path: str | Path` - YAML or JSON file, with a mapping at the top level
+- `flatten: bool = True` - Flatten nested mappings into dotted keys. With
+  `flatten=False`, each top-level entry is published whole, as a dict value.
+
+> ParamFileSource operates in BATCH mode: it publishes once, at start.
+
 ## Transformations
 
 ### FilterTransform
@@ -266,6 +369,205 @@ params:
   window_duration: 5.0  # for time windows (seconds)
   aggregation_fn_code: "lambda msgs: sum(m.value for m in msgs) / len(msgs)"
 ```
+
+### AlarmTransform
+
+Monitor a numeric stream against fixed thresholds. Emits **only on state
+transitions** (OK → ALARM, ALARM → OK), so a value that stays out of range
+produces one message, not one per sample.
+
+```python
+from cod3s_data.transformations.builtin import AlarmTransform
+
+transform = AlarmTransform(
+    broker=broker,
+    input_channels="sensors.extruder",
+    output_channel="alarms",
+    min_value=190.0,
+    max_value=230.0,
+)
+```
+
+**Parameters:**
+- `min_value: float | None = None` - Lower threshold
+- `max_value: float | None = None` - Upper threshold
+
+The output message has key `{input_key}.alarm` and a dict value:
+
+```python
+{"original_value": 235.1, "alarm_type": "max", "threshold": 230.0, "status": "ACTIVE"}
+```
+
+`status` is `"ACTIVE"` on entry and `"CLEARED"` on return to range.
+
+```yaml
+type: alarm
+input_channels: sensors.extruder
+output_channel: alarms
+params:
+  min_value: 190.0
+  max_value: 230.0
+```
+
+### RelativeAlarmTransform
+
+Alarm on deviation from a setpoint rather than on absolute bounds:
+`|value - setpoint| > tolerance`. State is tracked **per message key**, so one
+transform on a wildcard channel handles every sensor independently.
+
+```python
+from cod3s_data.transformations.builtin import RelativeAlarmTransform
+
+transform = RelativeAlarmTransform(
+    broker=broker,
+    input_channels="sensors.smoothed.*",
+    output_channel="alarms",
+    setpoint={"extruder": 210.0, "bed": 60.0},
+    tolerance_pct=5.0,
+)
+```
+
+**Parameters:**
+- `setpoint: float | dict[str, float]` - Target value, global or per key. Messages
+  whose key has no setpoint are ignored.
+- `tolerance_pct: float | None = None` - Tolerance as a percentage of the setpoint
+- `tolerance_abs: float | None = None` - Tolerance in absolute units
+- `alarm_type_label: str = "relative_threshold"` - Value written to `alarm_type`
+
+Exactly one of `tolerance_pct` or `tolerance_abs` must be given. The output
+message has key `{input_key}.alarm`, inherits the input tags, and carries:
+
+```python
+{
+    "status": "ACTIVE",          # or "CLEARED"
+    "alarm_type": "relative_threshold",
+    "direction": "OVER",         # or "UNDER"; empty on CLEARED
+    "original_value": {
+        "actual": 224.0,
+        "setpoint": 210.0,
+        "deviation": 14.0,
+        "tolerance": 10.5,
+        "deviation_pct": 6.6667,  # only when tolerance_pct is used
+    },
+}
+```
+
+### ThrottleTransform
+
+Rate-limit a stream: forward the first message, then suppress everything until
+`interval` seconds have passed.
+
+```python
+from cod3s_data.transformations.builtin import ThrottleTransform
+
+transform = ThrottleTransform(
+    broker=broker,
+    input_channels="sensors.**",
+    output_channel="sensors.downsampled",
+    interval=0.1,
+    per_key=True,
+)
+```
+
+**Parameters:**
+- `interval: float = 1.0` - Minimum seconds between two emitted messages
+- `per_key: bool = False` - Throttle each `message.key` on its own clock. Use this
+  on a wildcard subscription, where a single shared clock would let the busiest
+  sensor starve the others.
+
+### UnpackTransform
+
+Explode a dict-valued message into one message per entry, each published on its
+own sub-channel `{output_channel}.{key}`. Timestamp and tags are inherited;
+non-dict values pass through unchanged on `output_channel`.
+
+```python
+from cod3s_data.transformations.builtin import UnpackTransform
+
+transform = UnpackTransform(
+    broker=broker,
+    input_channels="csv.rows",
+    output_channel="sensors",
+)
+```
+
+A message valued `{"extruder": 210.0, "bed": 60.0}` becomes two messages, on
+`sensors.extruder` and `sensors.bed`. This is the usual bridge between a CSV
+source reading wide rows and per-sensor transforms downstream.
+
+### MovingAverageTransform
+
+Sliding-window mean, **per key**. Emits one smoothed message per input message
+once `min_samples` values are buffered — unlike `AggregateTransform`, which uses
+a tumbling window shared across keys and emits once per closed window.
+
+```python
+from cod3s_data.transformations.builtin import MovingAverageTransform
+
+transform = MovingAverageTransform(
+    broker=broker,
+    input_channels="sensors.*",
+    output_channel="sensors.smoothed",
+    window_type="count",
+    window_size=10,
+    min_samples=3,
+    key_suffix="_avg",
+)
+```
+
+**Parameters:**
+- `window_type: str = "count"` - `"count"` or `"time"`
+- `window_size: int | None = None` - Number of samples, for count windows
+- `window_duration: float | None = None` - Seconds, for time windows
+- `min_samples: int = 1` - Emit nothing until this many samples are buffered
+- `key_suffix: str = ""` - Appended to the output `message.key`, and the message is
+  re-published on `{output_channel}.{new_key}`. Lets a smoothed signal coexist with
+  its raw counterpart in a sink that keys by `message.key`, such as InfluxDB.
+
+### MedianFilterTransform
+
+Same as `MovingAverageTransform`, but takes the median of the window — more
+robust to isolated spikes. Same parameters.
+
+```python
+from cod3s_data.transformations.builtin import MedianFilterTransform
+
+transform = MedianFilterTransform(
+    broker=broker,
+    input_channels="sensors.*",
+    output_channel="sensors.filtered",
+    window_size=5,
+)
+```
+
+### DeviationFilterTransform
+
+Reject or clip values that stray from a setpoint by more than a tolerance.
+Stateless. Messages whose key has no setpoint, and non-numeric values, pass
+through unchanged.
+
+```python
+from cod3s_data.transformations.builtin import DeviationFilterTransform
+
+transform = DeviationFilterTransform(
+    broker=broker,
+    input_channels="sensors.*",
+    output_channel="sensors.clean",
+    setpoint={"extruder": 210.0},
+    tolerance_pct=10.0,
+    mode="clip",
+)
+```
+
+**Parameters:**
+- `setpoint: float | dict[str, float]` - Target value, global or per key
+- `tolerance_pct: float | None = None` - Tolerance as a percentage of the setpoint
+- `tolerance_abs: float | None = None` - Tolerance in absolute units
+- `mode: str = "reject"` - `"reject"` drops out-of-band messages; `"clip"` clamps
+  them to `[setpoint - tol, setpoint + tol]`
+- `key_suffix: str = ""` - Appended to the output `message.key`
+
+Exactly one of `tolerance_pct` or `tolerance_abs` must be given.
 
 ## Destinations
 
@@ -354,6 +656,69 @@ dest.clear()
 - `filter_by(key=None, **tags)` - Filter messages by key and/or tags
 - `async wait_for_messages(count, timeout=5.0)` - Wait for N messages with timeout
 
+### InfluxDBDestination
+
+Write messages to InfluxDB 2.x as time-series points. Requires the optional
+dependency:
+
+```bash
+pip install 'cod3s-data[influxdb]'
+```
+
+```python
+from cod3s_data.destinations.influxdb import InfluxDBDestination
+
+dest = InfluxDBDestination(
+    broker=broker,
+    channel_pattern="sensors.**",
+    url="http://localhost:8086",
+    token="my-token",
+    org="cod3s",
+    bucket="sensor_data",
+    extra_tags={"printer": "gemini3d"},
+    batch_size=100,
+)
+```
+
+**Message to point mapping:**
+- `message.key` becomes the measurement name, unless `measurement` overrides it
+- `message.timestamp` becomes the point timestamp
+- `message.tags`, merged with `extra_tags`, become InfluxDB tags
+- `message.value` becomes the fields: a dict contributes one field per entry
+  (nested dicts are flattened into dotted field names), any other value is
+  stored in a single field named `value`
+
+**Parameters:**
+- `url: str = "http://localhost:8086"` - Server URL
+- `token: str = ""` - Authentication token
+- `org: str = ""` - Organization
+- `bucket: str = ""` - Target bucket
+- `measurement: str | None = None` - Fixed measurement name
+- `extra_tags: dict[str, str] | None = None` - Tags added to every point
+- `buffer_size`, `overflow_strategy`, `retry_attempts`, `retry_strategy`,
+  `dlq_channel`, `batch_size` - Inherited from `Destination`
+
+```yaml
+type: influxdb
+channel_pattern: sensors.**
+params:
+  url: http://localhost:8086
+  token: my-token
+  org: cod3s
+  bucket: sensor_data
+  extra_tags:
+    printer: gemini3d
+```
+
+> InfluxDB rejects a field that changes type between points. Keep a given
+> measurement's field types stable across the pipeline.
+
+A local server for development and for the integration tests:
+
+```bash
+docker compose -f docker-compose.influxdb.yml up -d
+```
+
 ## Pipeline State
 
 ```python
@@ -368,6 +733,38 @@ from cod3s_data.framework import PipelineState
 ```
 
 ## Configuration
+
+### Component type names
+
+The `type:` field of a YAML component resolves against the `ComponentFactory`
+registry. Built-ins:
+
+| Kind | `type:` | Class |
+|---|---|---|
+| Source | `random` | `RandomSource` |
+| Source | `sequence` | `SequenceSource` |
+| Source | `file` | `FileSource` |
+| Source | `csv` | `CSVSource` |
+| Source | `csv_watch` | `CSVWatchSource` |
+| Source | `directory_watch` | `DirectoryWatchSource` |
+| Source | `param_file` | `ParamFileSource` |
+| Transformation | `filter` | `FilterTransform` |
+| Transformation | `map` | `MapTransform` |
+| Transformation | `aggregate` | `AggregateTransform` |
+| Transformation | `alarm` | `AlarmTransform` |
+| Transformation | `relative_alarm` | `RelativeAlarmTransform` |
+| Transformation | `throttle` | `ThrottleTransform` |
+| Transformation | `unpack` | `UnpackTransform` |
+| Transformation | `moving_average` | `MovingAverageTransform` |
+| Transformation | `median_filter` | `MedianFilterTransform` |
+| Transformation | `deviation_filter` | `DeviationFilterTransform` |
+| Destination | `console` | `ConsoleDestination` |
+| Destination | `file` | `FileDestination` |
+| Destination | `inmemory` | `InMemoryDestination` |
+| Destination | `collect` | `CollectDestination` |
+| Destination | `influxdb` | `InfluxDBDestination` |
+
+Plugins add their own names to the same registry — see [Plugins](#plugins).
 
 ### PipelineConfig
 
@@ -421,6 +818,68 @@ from cod3s_data.config.loaders import load_yaml
 
 config = load_yaml("pipeline.yaml")
 ```
+
+### Dynamic parameters (ParamRef)
+
+Any component parameter can be sourced from a broker channel instead of being
+fixed in the configuration. Replace the value with a `ref` mapping:
+
+```yaml
+transformations:
+  - type: relative_alarm
+    input_channels: sensors.smoothed.*
+    output_channel: alarms
+    params:
+      setpoint:
+        ref: params.extruder.setpoint
+        default: 210.0
+      tolerance_pct:
+        ref: params.extruder
+        key: tolerance_pct
+        default: 5.0
+```
+
+**Fields:**
+- `ref: str` - Channel publishing this parameter's value
+- `default: Any = None` - Value used until the first message arrives on `ref`
+- `key: str | None = None` - When the channel publishes dict-valued messages,
+  extract this key from the dict
+
+At construction the factory substitutes `default` and attaches a
+`ParameterStore` to the component. The store subscribes to `ref` and rebinds
+the attribute on every new message; it also reads the channel's history at
+`start()`, so a transform that starts after the parameter was published is
+hydrated before its first data message arrives. Parameter references work on
+sources, transformations and destinations alike, and nest one level deep — a
+`ParamRef` must appear as a direct value in `params`, not inside a nested dict
+or list.
+
+Values usually come from a [`ParamFileSource`](#paramfilesource), which turns a
+YAML job file into one message per parameter. They can also be published by any
+other source, or updated at runtime.
+
+**Reading and updating at runtime** — the Observatory exposes the parameter
+plane over HTTP and WebSocket, and the *Parameters* page of the UI is built on
+it:
+
+```bash
+# List every parameter declared via ParamRef, with its current value
+curl http://localhost:8765/api/params
+
+# Publish a new value; every store subscribed to that channel rebinds
+curl -X POST http://localhost:8765/api/params/params.extruder.setpoint \
+     -H 'Content-Type: application/json' \
+     -d '{"value": 215.0}'
+```
+
+The same operation over the Observatory WebSocket:
+
+```json
+{"type": "param.update", "payload": {"channel": "params.extruder.setpoint", "value": 215.0}}
+```
+
+Pass `"key"` alongside `"value"` to update a single entry of a dict-valued
+parameter channel.
 
 ## Plugins
 
@@ -484,10 +943,12 @@ def register(factory: ComponentFactory) -> None:
 ### ComponentFactory Introspection
 
 ```python
-factory.registered_source_types         # -> set[str], e.g. {"random", "sequence", "csv", "file"}
-factory.registered_transformation_types # -> set[str], e.g. {"filter", "map", "aggregate"}
-factory.registered_destination_types    # -> set[str], e.g. {"console", "file", "inmemory", "collect"}
+factory.registered_source_types          # -> set[str], the "type:" names usable in YAML
+factory.registered_transformation_types
+factory.registered_destination_types
 ```
+
+See [Component type names](#component-type-names) for the built-in registry.
 
 ## Observability
 
