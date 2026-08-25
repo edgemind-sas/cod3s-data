@@ -66,18 +66,23 @@ Logs are structured events with bound context, not formatted strings, so a
 pipeline's output can be parsed downstream. `--json-logs` switches the renderer
 without touching a call site.
 
-### ⚠ Polars primary, pandas as a fallback — *diverged*
+### Polars for CSV, with no fallback
 
 **Decided:** polars for CSV and dataframe work, with pandas as an optional
 fallback for ecosystem compatibility.
 
-**Today:** `CSVSource` does contain the fallback (`file_sources.py`, the
-encoding path falls back to pandas), but **pandas is not a declared
-dependency**. The fallback therefore raises `ImportError` unless the user
-happens to have pandas installed for other reasons.
+**Settled on 2026-08-25:** the fallback is gone; polars is the only reader.
 
-Either declare pandas as an optional extra or remove the fallback. As it
-stands, the code advertises a path that is not reachable from a clean install.
+It could never have run. It sat behind `except ImportError` on the polars
+import, and polars is a *required* dependency — so the guard never fired. Had
+it fired, the fallback would have failed anyway, because pandas was declared
+nowhere. Two independent reasons the branch was unreachable.
+
+Its stated justification — that pandas "supports all encodings" — had also
+stopped being true of the alternative: the polars path decodes non-utf8 files
+with Python before parsing, so it handles every encoding pandas would have.
+
+One reader is also one behaviour to document and one library to keep current.
 
 ### ⚠ Pydantic JSON by default, msgspec as a fast option — *diverged*
 
