@@ -6,9 +6,10 @@ happens today.
 
 These decisions were taken in January and February 2026, when the framework was
 designed. They were re-checked against the code on 2026-08-24; four did not
-survive that check. Three are still marked **⚠ diverged** and tracked in the
-[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues); the
-fourth — the frontend missing from the wheel — has since been fixed.
+survive that check. Three have since been settled: the frontend missing from
+the wheel, the pandas fallback that could not run, and the msgspec dependency
+nothing imported. One is still marked **⚠ diverged** and tracked in the
+[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues).
 
 For *what* a component does, read the [API reference](api-reference.md). This
 page is about *why*.
@@ -57,8 +58,8 @@ polars rather than a hand-rolled reader, Pydantic rather than hand-written
 validation, structlog rather than a logging wrapper, FastAPI rather than an
 HTTP layer.
 
-Where several options existed, the faster one won — which is how polars,
-Pydantic v2 and (nominally) msgspec were chosen.
+Where several options existed, the faster one won — which is how polars and
+Pydantic v2 were chosen.
 
 ### structlog for all logging
 
@@ -66,29 +67,43 @@ Logs are structured events with bound context, not formatted strings, so a
 pipeline's output can be parsed downstream. `--json-logs` switches the renderer
 without touching a call site.
 
-### ⚠ Polars primary, pandas as a fallback — *diverged*
+### Polars for CSV, with no fallback
 
 **Decided:** polars for CSV and dataframe work, with pandas as an optional
 fallback for ecosystem compatibility.
 
-**Today:** `CSVSource` does contain the fallback (`file_sources.py`, the
-encoding path falls back to pandas), but **pandas is not a declared
-dependency**. The fallback therefore raises `ImportError` unless the user
-happens to have pandas installed for other reasons.
+**Settled on 2026-08-25:** the fallback is gone; polars is the only reader.
 
-Either declare pandas as an optional extra or remove the fallback. As it
-stands, the code advertises a path that is not reachable from a clean install.
+It could never have run. It sat behind `except ImportError` on the polars
+import, and polars is a *required* dependency — so the guard never fired. Had
+it fired, the fallback would have failed anyway, because pandas was declared
+nowhere. Two independent reasons the branch was unreachable.
 
-### ⚠ Pydantic JSON by default, msgspec as a fast option — *diverged*
+Its stated justification — that pandas "supports all encodings" — had also
+stopped being true of the alternative: the polars path decodes non-utf8 files
+with Python before parsing, so it handles every encoding pandas would have.
+
+One reader is also one behaviour to document and one library to keep current.
+
+### Pydantic JSON, and only Pydantic JSON
 
 **Decided:** Pydantic's own JSON serialization by default, with msgspec
 available where speed matters.
 
-**Today:** msgspec is a **required** dependency in `pyproject.toml` and is
-**imported nowhere** in the package or the tests. It is dead weight in every
-install.
+**Settled on 2026-08-25:** the first half held — `Message.to_json()` is
+`model_dump_json()`. The second half never happened: msgspec was a *required*
+dependency that no module and no test ever imported, so every install carried
+it and nothing used it. It has been dropped.
 
-Either use it where it was meant to be used, or drop the dependency.
+The speed argument had lost its target in the meantime. The one hot path that
+would justify a faster encoder is the Observatory WebSocket, and that was
+deliberately decided the other way — see *JSON on the WebSocket, not
+MessagePack* below. The Observatory also samples messages rather than encoding
+every one, because the browser saturates long before the encoder does.
+
+If a serialization bottleneck ever shows up in a measurement, this is worth
+reopening. It should not be reopened on the strength of a benchmark someone
+read.
 
 ---
 

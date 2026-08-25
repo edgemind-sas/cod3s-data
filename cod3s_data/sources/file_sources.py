@@ -90,7 +90,7 @@ class CSVSource(Source):
     """
     Read messages from CSV files (BATCH or TRANSPOSE mode).
 
-    Uses polars for performance, falls back to pandas if not available.
+    Uses polars to read the file.
 
     Features:
     - Custom delimiter, encoding, skip_rows, has_header, max_rows
@@ -198,58 +198,42 @@ class CSVSource(Source):
     def _read_csv_rows(self) -> list[dict[str, Any]]:
         """Read CSV file and return list of row dicts.
 
-        Uses polars for performance. For non-utf8 encodings, reads the file
-        with Python's open() first then passes content to polars via StringIO.
-        Falls back to pandas if polars is not available.
+        Uses polars, which is a required dependency. For non-utf8 encodings,
+        the file is decoded with Python first and handed to polars via
+        StringIO, since polars itself only reads utf-8.
+
+        polars is imported here rather than at module level: it costs ~58ms to
+        import, against ~77ms for the whole of `cod3s_data`, and most pipelines
+        never read a CSV.
         """
+        import polars as pl
+
         is_utf8 = self.encoding.lower().replace("-", "") == "utf8"
 
-        try:
-            import polars as pl
+        if is_utf8:
+            df = pl.read_csv(
+                str(self.file_path),
+                separator=self.delimiter,
+                skip_rows=self.skip_rows,
+                has_header=self.has_header,
+                n_rows=self.max_rows,
+            )
+        else:
+            content = self.file_path.read_text(encoding=self.encoding)
+            # Skip rows manually from the decoded content
+            if self.skip_rows:
+                lines = content.split("\n")
+                content = "\n".join(lines[self.skip_rows :])
+            df = pl.read_csv(
+                io.StringIO(content),
+                separator=self.delimiter,
+                has_header=self.has_header,
+                n_rows=self.max_rows,
+            )
 
-            if is_utf8:
-                df = pl.read_csv(
-                    str(self.file_path),
-                    separator=self.delimiter,
-                    skip_rows=self.skip_rows,
-                    has_header=self.has_header,
-                    n_rows=self.max_rows,
-                )
-            else:
-                # polars only supports utf-8; decode with Python first
-                content = self.file_path.read_text(encoding=self.encoding)
-                # Skip rows manually from the decoded content
-                if self.skip_rows:
-                    lines = content.split("\n")
-                    content = "\n".join(lines[self.skip_rows :])
-                df = pl.read_csv(
-                    io.StringIO(content),
-                    separator=self.delimiter,
-                    has_header=self.has_header,
-                    n_rows=self.max_rows,
-                )
-
-            if not self.has_header:
-                df.columns = [f"column_{i}" for i in range(len(df.columns))]
-            return list(df.iter_rows(named=True))
-
-        except ImportError:
-            pass
-
-        # Fall back to pandas (supports all encodings)
-        import pandas as pd  # type: ignore[import-untyped]
-
-        df = pd.read_csv(
-            str(self.file_path),
-            sep=self.delimiter,
-            encoding=self.encoding,
-            skiprows=self.skip_rows if self.skip_rows else None,
-            header=0 if self.has_header else None,
-            nrows=self.max_rows,
-        )
         if not self.has_header:
             df.columns = [f"column_{i}" for i in range(len(df.columns))]
-        return [row.to_dict() for _, row in df.iterrows()]
+        return list(df.iter_rows(named=True))
 
     async def produce(self) -> AsyncIterator[Message]:
         """Read CSV and yield messages, with optional temporal replay."""
