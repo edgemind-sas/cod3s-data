@@ -30,7 +30,6 @@ dependencies = [
     "polars>=1.15,<2.0",
     "structlog>=24.0,<25.0",
     "pyyaml>=6.0,<7.0",
-    "msgspec>=0.18,<1.0",
 ]
 
 [project.optional-dependencies]

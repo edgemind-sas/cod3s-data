@@ -126,4 +126,4 @@ Read `BACKLOG.md` before assuming something is missing by accident — it indexe
 the issue tracker, where the known gaps are recorded.
 
 `docs/architecture.md` records why the framework is shaped this way, and the
-three places the code still diverges from its own design decisions.
+one place the code still diverges from its own design decisions.
