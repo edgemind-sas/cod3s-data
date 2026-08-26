@@ -50,8 +50,8 @@
             </div>
           </div>
 
-          <!-- Scrollable canvas -->
-          <div ref="canvasWrap" class="timeline-canvas-wrap" @scroll="onCanvasScroll">
+          <!-- Horizontally scrollable plot -->
+          <div ref="scrollWrap" class="timeline-scroll" @scroll="onScroll">
             <svg
               :width="svgWidth"
               :height="svgHeight"
@@ -84,7 +84,7 @@
               <!-- Message dots -->
               <circle
                 v-for="dot in dots"
-                :key="dot.id"
+                :key="dot.messageId"
                 :cx="dot.x"
                 :cy="dot.y"
                 :r="dot.r"
@@ -104,12 +104,12 @@
           class="timeline-tooltip"
           :style="{ left: tooltipLeft + 'px', top: tooltipTop + 'px' }"
         >
-          <div class="text-caption font-weight-bold">{{ hoveredDot.channel }}</div>
-          <div class="text-caption">Key: {{ hoveredDot.key ?? '-' }}</div>
-          <div class="text-caption" v-if="hoveredDot.valuePreview">Value: {{ hoveredDot.valuePreview }}</div>
-          <div class="text-caption" v-if="hoveredDot.tagsText">Tags: {{ hoveredDot.tagsText }}</div>
-          <div class="text-caption">Subscribers: {{ hoveredDot.subscriberCount }}</div>
-          <div class="text-caption text-medium-emphasis">{{ hoveredDot.time }}</div>
+          <div class="text-caption font-weight-bold">{{ hoveredDot.msg.channel }}</div>
+          <div class="text-caption">Key: {{ hoveredDot.msg.key ?? '-' }}</div>
+          <div class="text-caption" v-if="hoveredDot.msg.value_preview">Value: {{ hoveredDot.msg.value_preview }}</div>
+          <div class="text-caption" v-if="hoveredTags">Tags: {{ hoveredTags }}</div>
+          <div class="text-caption">Subscribers: {{ hoveredDot.msg.subscriber_count }}</div>
+          <div class="text-caption text-medium-emphasis">{{ hoveredTime }}</div>
         </div>
       </v-card>
     </template>
@@ -118,7 +118,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { useMessagesStore } from '@/stores/messages'
+import { useMessagesStore, type StoredMessage } from '@/stores/messages'
 
 const PALETTE = ['#42A5F5', '#66BB6A', '#FFA726', '#EF5350', '#AB47BC', '#26C6DA', '#EC407A', '#8D6E63']
 
@@ -141,7 +141,7 @@ const zoomLevels = [
 ]
 const zoomIndex = ref(1)
 const autoScroll = ref(true)
-const canvasWrap = ref<HTMLElement | null>(null)
+const scrollWrap = ref<HTMLElement | null>(null)
 const containerEl = ref<HTMLElement | null>(null)
 const containerWidth = ref(800)
 
@@ -164,24 +164,26 @@ onBeforeUnmount(() => {
 })
 
 interface DotData {
-  id: number
+  messageId: string
   x: number
   y: number
   r: number
   color: string
-  channel: string
-  key: string | null
-  valuePreview: string
-  tagsText: string
-  subscriberCount: number
-  time: string
+  msg: StoredMessage
 }
 
 const hoveredDot = ref<DotData | null>(null)
 
+const hoveredTags = computed(() => hoveredDot.value ? formatTags(hoveredDot.value.msg.tags) : '')
+const hoveredTime = computed(() => {
+  if (!hoveredDot.value) return ''
+  const d = new Date(hoveredDot.value.msg.timestamp)
+  return `${d.toLocaleTimeString()}.${String(d.getMilliseconds()).padStart(3, '0')}`
+})
+
 const tooltipLeft = computed(() => {
-  if (!hoveredDot.value || !canvasWrap.value) return 0
-  const scrollLeft = canvasWrap.value.scrollLeft
+  if (!hoveredDot.value || !scrollWrap.value) return 0
+  const scrollLeft = scrollWrap.value.scrollLeft
   const xInView = hoveredDot.value.x - scrollLeft
   return Math.min(Math.max(xInView + LANE_LABELS_WIDTH + 16, LANE_LABELS_WIDTH), (containerWidth.value + LANE_LABELS_WIDTH) - 200)
 })
@@ -199,30 +201,38 @@ const tooltipTop = computed(() => {
 
 const currentWindow = computed(() => zoomLevels[zoomIndex.value])
 
-const canvasAvailableWidth = computed(() => Math.max(containerWidth.value, 400))
+const availableWidth = computed(() => Math.max(containerWidth.value, 400))
 
 const pxPerSecond = computed(() => {
   const dur = totalDurationSec.value
   if (dur <= 0) return 12
-  const natural = canvasAvailableWidth.value / dur
+  const natural = availableWidth.value / dur
   return Math.max(natural, 4)
 })
+
+// A dot's x is measured from `start` and scaled by `pxPerSecond`. Both used to
+// follow the retained messages, so adding one moved all thousand: the origin
+// tracked the oldest message, and the scale tracked the span. Snapping them to a
+// ten-second grid — the origin down, the extent up — holds them still between
+// jumps, and the DOM then only sees the dots that genuinely came and went.
+const GRID_SEC = 10
+const GRID_MS = GRID_SEC * 1000
 
 const timeRange = computed(() => {
   const msgs = messagesStore.messages
   if (msgs.length === 0) return { start: 0, end: 0 }
-  const start = new Date(msgs[0].timestamp).getTime()
-  const end = new Date(msgs[msgs.length - 1].timestamp).getTime()
-  const pad = 2000
-  return { start: start - pad, end: end + pad }
+  const first = Date.parse(msgs[0].timestamp) - 2000
+  const end = Date.parse(msgs[msgs.length - 1].timestamp) + 2000
+  return { start: Math.floor(first / GRID_MS) * GRID_MS, end }
 })
 
 const totalDurationSec = computed(() => {
   const { start, end } = timeRange.value
-  return Math.max((end - start) / 1000, currentWindow.value.windowSec)
+  const span = Math.max((end - start) / 1000, currentWindow.value.windowSec)
+  return Math.ceil(span / GRID_SEC) * GRID_SEC
 })
 
-const svgWidth = computed(() => Math.max(totalDurationSec.value * pxPerSecond.value, canvasAvailableWidth.value))
+const svgWidth = computed(() => Math.max(totalDurationSec.value * pxPerSecond.value, availableWidth.value))
 const svgHeight = computed(() => AXIS_HEIGHT + Math.max(messagesStore.channels.length, 1) * LANE_HEIGHT)
 
 const channelIndex = computed(() => {
@@ -255,45 +265,38 @@ function formatTags(tags: Record<string, string> | undefined): string {
   return Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(', ')
 }
 
+// Geometry only. The strings the tooltip needs are derived from the hovered
+// message instead, so a recompute does not format a thousand of them to show one.
 const dots = computed<DotData[]>(() => {
   const { start } = timeRange.value
   const ppSec = pxPerSecond.value
-  return messagesStore.messages.map((msg, i) => {
-    const ts = new Date(msg.timestamp).getTime()
-    const offsetSec = (ts - start) / 1000
+  return messagesStore.messages.map((msg) => {
+    const offsetSec = (Date.parse(msg.timestamp) - start) / 1000
     const laneIdx = channelIndex.value.get(msg.channel) ?? 0
-    const r = Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14)
-    const d = new Date(msg.timestamp)
-    const ms = String(d.getMilliseconds()).padStart(3, '0')
     return {
-      id: i,
+      messageId: msg.message_id,
       x: offsetSec * ppSec,
       y: AXIS_HEIGHT + laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2,
-      r,
+      r: Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14),
       color: channelColor(msg.channel),
-      channel: msg.channel,
-      key: msg.key,
-      valuePreview: msg.value_preview ?? '',
-      tagsText: formatTags(msg.tags),
-      subscriberCount: msg.subscriber_count,
-      time: `${d.toLocaleTimeString()}.${ms}`,
+      msg,
     }
   })
 })
 
 let userScrolled = false
 
-function onCanvasScroll() {
-  if (!canvasWrap.value) return
-  const el = canvasWrap.value
+function onScroll() {
+  if (!scrollWrap.value) return
+  const el = scrollWrap.value
   const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 20
   if (!atEnd) userScrolled = true
   else userScrolled = false
 }
 
 function scrollToEnd() {
-  if (canvasWrap.value) {
-    canvasWrap.value.scrollLeft = canvasWrap.value.scrollWidth
+  if (scrollWrap.value) {
+    scrollWrap.value.scrollLeft = scrollWrap.value.scrollWidth
   }
 }
 
@@ -347,7 +350,7 @@ watch(autoScroll, (v) => {
   padding: 0 4px;
 }
 
-.timeline-canvas-wrap {
+.timeline-scroll {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
