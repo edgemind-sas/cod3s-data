@@ -98,12 +98,15 @@ typecheck:
 # ----------------------------------------------------------------------------
 # Stage : test — pytest, couverture comprise
 #
-# Toute la suite, tests d'intégration compris : ils tournent en processus, sauf
-# ceux de la destination InfluxDB, qui se désactivent d'eux-mêmes quand aucun
-# serveur ne répond. Les faire tourner ici demanderait un `services:` InfluxDB
-# et une URL configurable — l'adresse est écrite en dur à localhost:8086 dans
-# le test, alors qu'un service GitLab s'adresse par son nom d'hôte. À reprendre
-# le jour où le pipeline doit garantir cette destination.
+# Toute la suite, tests d'intégration compris, InfluxDB y compris désormais : le
+# service ci-dessous est configuré comme docker-compose.influxdb.yml, et le test
+# lit son adresse dans l'environnement au lieu de la coder en dur.
+#
+# COD3S_TEST_INFLUXDB_REQUIRED est le point important. Sans lui, un service
+# cassé ferait retomber ces tests dans le `skip` silencieux qui les a laissés
+# quatre versions sans jamais tourner : un rapport JUnit ne distingue pas
+# « ignoré » de « réussi » d'un coup d'œil. Avec lui, l'absence de serveur est
+# un échec, pas une omission.
 #
 # --cov-report=xml s'ajoute aux rapports déclarés dans pyproject.toml : c'est le
 # format que GitLab lit pour afficher la couverture dans la MR.
@@ -111,6 +114,23 @@ typecheck:
 test:
   extends: .python-job
   stage: test
+  services:
+    - name: influxdb:2.7-alpine
+      alias: influxdb
+      variables:
+        DOCKER_INFLUXDB_INIT_MODE: setup
+        DOCKER_INFLUXDB_INIT_USERNAME: admin
+        DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+        DOCKER_INFLUXDB_INIT_ORG: cod3s
+        DOCKER_INFLUXDB_INIT_BUCKET: test
+        DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: test-token
+  variables:
+    # Un service GitLab s'adresse par son alias, jamais par localhost.
+    COD3S_TEST_INFLUXDB_URL: 'http://influxdb:8086'
+    COD3S_TEST_INFLUXDB_TOKEN: 'test-token'
+    COD3S_TEST_INFLUXDB_ORG: 'cod3s'
+    COD3S_TEST_INFLUXDB_BUCKET: 'test'
+    COD3S_TEST_INFLUXDB_REQUIRED: '1'
   script:
     - uv run pytest --cov-report=xml --junitxml=report.xml
   coverage: '/^TOTAL.+?(\d+\%)$/'
