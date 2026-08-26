@@ -35,8 +35,12 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 | # | | |
 |---|---|---|
-| [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) | The Observatory HTTP/WebSocket surface is barely tested | `tests` |
 | [#7](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/7) | InfluxDB integration tests never run in CI | `tests` |
+
+[#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
+REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
+what the ticket predicted it would: every `/api/debug/*` route answered 500
+when the Observatory ran without `--debug`, which is the default.
 
 [#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
 public methods that carried no docstring now do, and
