@@ -13,10 +13,9 @@ cleanup recovering from.
 
 | # | | |
 |---|---|---|
-| [#4](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/4) | `observatory/models/` is dead code | `défaut` |
 | [#5](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/5) | The timeline renders SVG where canvas was decided | `défaut` |
 
-Three defects here are fixed. [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1)
+Four defects here are fixed. [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1)
 — an installed package having no Observatory UI — the built artifact is now
 versioned and declared as `package-data`, and two CI jobs keep it that way.
 [#2](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/2) and
@@ -24,6 +23,9 @@ versioned and declared as `package-data`, and two CI jobs keep it that way.
 dependency defects: `msgspec` was required and imported nowhere, and the pandas
 fallback in `CSVSource` could not run. Both were removed rather than wired in —
 the reasoning is in [docs/architecture.md](docs/architecture.md).
+[#4](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/4) — a Pydantic
+description of the WebSocket protocol that nothing imported — was removed for
+the same reason, and for one more: it no longer described the protocol.
 
 ## Tests and CI
 
