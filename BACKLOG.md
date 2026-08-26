@@ -11,21 +11,25 @@ cleanup recovering from.
 
 ## Defects
 
-| # | | |
-|---|---|---|
-| [#5](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/5) | The timeline renders SVG where canvas was decided | `défaut` |
+None open. The five that were are all settled.
 
-Four defects here are fixed. [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1)
-— an installed package having no Observatory UI — the built artifact is now
-versioned and declared as `package-data`, and two CI jobs keep it that way.
+[#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
+package having no Observatory UI — the built artifact is now versioned and
+declared as `package-data`, and two CI jobs keep it that way.
 [#2](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/2) and
 [#3](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/3) were the two
 dependency defects: `msgspec` was required and imported nowhere, and the pandas
-fallback in `CSVSource` could not run. Both were removed rather than wired in —
-the reasoning is in [docs/architecture.md](docs/architecture.md).
+fallback in `CSVSource` could not run. Both were removed rather than wired in.
 [#4](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/4) — a Pydantic
 description of the WebSocket protocol that nothing imported — was removed for
 the same reason, and for one more: it no longer described the protocol.
+[#5](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/5) — a timeline
+decided for canvas and rendered in SVG — was settled the other way round: the
+marker count is capped at 1000, so the premise of the canvas decision never
+arises, while the cost that is real, the redraw rate, is now coalesced per
+animation frame.
+
+The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 ## Tests and CI
 

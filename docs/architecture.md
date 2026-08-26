@@ -6,9 +6,10 @@ happens today.
 
 These decisions were taken in January and February 2026, when the framework was
 designed. They were re-checked against the code on 2026-08-24; four did not
-survive that check. Three have since been settled: the frontend missing from
-the wheel, the pandas fallback that could not run, and the msgspec dependency
-nothing imported. One is still marked **⚠ diverged** and tracked in the
+survive that check. All four have since been settled: the frontend missing from
+the wheel, the pandas fallback that could not run, the msgspec dependency
+nothing imported, and the timeline decided for canvas and built in SVG. What
+remains open is tracked in the
 [issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues).
 
 For *what* a component does, read the [API reference](api-reference.md). This
@@ -194,18 +195,48 @@ validating rather than merely documenting, the schema should be written against
 the messages that actually cross the socket, alongside the tests that exercise
 them — [issue #6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6).
 
-### ⚠ Canvas for the timeline — *diverged*
+### SVG for the timeline — the cost is the redraw rate, not the marker count
 
 **Decided:** render the timeline on a `<canvas>`, because SVG DOM manipulation
 becomes the bottleneck at thousands of visible markers, and canvas allows
 drawing only the visible window plus density heatmaps when zoomed out.
 
-**Today:** `TimelineView.vue` renders `<svg>`. The element that carries the
-name is a wrapper `div` with a `timeline-canvas-wrap` class, not a canvas.
+**Settled on 2026-08-26:** `TimelineView.vue` renders `<svg>`, and it stays
+that way. The premise did not survive the check — the marker count cannot reach
+thousands. `stores/messages.ts` retains 1000 messages and evicts the oldest, so
+the plot is capped at a thousand `<circle>` elements by construction, which is
+well inside what SVG handles.
 
-Either the performance argument did not hold in practice and the decision was
-quietly reversed, or the reversal was accidental. Worth settling before anyone
-pushes the timeline to high message rates.
+The cost the decision was reaching for is real, but it is a *rate*, not a count,
+and canvas on its own would not have addressed it. Sampling defaults to `none`,
+so a fast pipeline delivers one WebSocket event per message, and each one drove
+a full re-render: the store replaced its array, every derived value was
+invalidated, and every dot moved. That last part was the expensive one and it
+was not obvious — a dot's `x` derives from the time origin, which tracked the
+oldest retained message, and from `pxPerSecond`, which tracked the retained
+span. Both shifted whenever a message arrived, so adding one dot rewrote the
+coordinates of the other thousand. A canvas would have redrawn a thousand points
+per message for exactly the same reason.
+
+Three changes put the rate under the display's control instead of the
+pipeline's. Arrivals are coalesced into one reactive mutation per animation
+frame. The origin and the extent are snapped to a ten-second grid — the origin
+down, the extent up — so both hold still between jumps and the dots that did not
+move keep their coordinates. Dots are keyed by message id and carry geometry
+alone; the tooltip's formatted strings are derived from the hovered message,
+rather than being built for a thousand messages in order to display one.
+
+Replaying evictions against both formulas, counting surviving dots whose `x`
+changed, gives per arrival: at 100 msg/s, 999 before and 5 after; at 10 msg/s,
+999 and 20; at 1 msg/s, 999 and 100. The middle case is the one worth keeping in
+mind — it is where `pxPerSecond` sits between its floor and the zoom window, so
+quantising the origin alone changed nothing there and the scale had to be
+quantised too.
+
+What this does not buy is the other half of the canvas argument: drawing only
+the visible window, and density heatmaps when zoomed out. Both remain out of
+reach in SVG, and both only start to matter above the 1000-message cap. Raising
+that cap is what would reopen this decision.
 
 ### Bundle the built frontend in the Python package
 
