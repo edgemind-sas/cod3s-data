@@ -37,7 +37,11 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 |---|---|---|
 | [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) | The Observatory HTTP/WebSocket surface is barely tested | `tests` |
 | [#7](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/7) | InfluxDB integration tests never run in CI | `tests` |
-| [#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) | 28 public methods have no docstring | `chore` |
+
+[#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
+public methods that carried no docstring now do, and
+`tests/unit/test_public_api_docstrings.py` fails if a new one appears. Sixteen
+public *properties* are still undocumented; the check does not cover them.
 
 ## Features designed but not built
 

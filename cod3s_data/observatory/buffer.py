@@ -31,6 +31,7 @@ class ObservatoryEvent:
     data: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the event as a JSON-serialisable dictionary."""
         return {
             "type": self.type.value,
             "timestamp": self.timestamp.isoformat(),

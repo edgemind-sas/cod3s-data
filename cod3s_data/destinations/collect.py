@@ -24,28 +24,58 @@ class CollectDestination(Destination):
         self._wait_event = asyncio.Event()
 
     async def write(self, message: Message) -> None:
+        """Record the message for later assertion."""
         async with self._lock:
             self.messages.append(message)
             self._wait_event.set()
             self._wait_event.clear()
 
     def get_all(self) -> list[Message]:
+        """Return a copy of the messages collected so far."""
         return self.messages.copy()
 
     def clear(self) -> None:
+        """Discard everything collected so far."""
         self.messages.clear()
 
     def assert_count(self, expected: int) -> None:
+        """Assert that exactly `expected` messages were collected.
+
+        Args:
+            expected: Number of messages that should have arrived
+
+        Raises:
+            AssertionError: If the collected count differs
+        """
         assert len(self.messages) == expected, (
             f"Expected {expected} messages, got {len(self.messages)}"
         )
 
     def assert_min_count(self, minimum: int) -> None:
+        """Assert that at least `minimum` messages were collected.
+
+        Useful where the exact count depends on timing.
+
+        Args:
+            minimum: Smallest acceptable number of messages
+
+        Raises:
+            AssertionError: If fewer messages were collected
+        """
         assert len(self.messages) >= minimum, (
             f"Expected at least {minimum} messages, got {len(self.messages)}"
         )
 
     def filter_by(self, key: str | None = None, **tags: str) -> list[Message]:
+        """Select collected messages by key and by tag values.
+
+        Args:
+            key: Message key to match, or None to accept any key
+            **tags: Tag values that must all match exactly
+
+        Returns:
+            The messages meeting every criterion, in arrival order
+        """
         results = self.messages
         if key:
             results = [m for m in results if m.key == key]
@@ -54,6 +84,18 @@ class CollectDestination(Destination):
         return results
 
     async def wait_for_messages(self, count: int, timeout: float = 5.0) -> None:
+        """Wait until `count` messages have been collected.
+
+        Polls the collected count every 10 ms, so it returns immediately when
+        the messages have already arrived.
+
+        Args:
+            count: Number of messages to wait for
+            timeout: Seconds to wait before giving up
+
+        Raises:
+            TimeoutError: If the count is not reached within the timeout
+        """
         start = asyncio.get_event_loop().time()
         while len(self.messages) < count:
             if asyncio.get_event_loop().time() - start > timeout:

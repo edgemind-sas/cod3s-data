@@ -62,6 +62,11 @@ class Destination(ABC):
         self._description: str = ""
 
     async def start(self) -> None:
+        """Subscribe to the channel pattern and begin writing.
+
+        Starts any attached parameter stores, subscribes to the broker, then
+        launches the background writer loop that drains the buffer.
+        """
         self._running = True
         for store in self._param_stores:
             await store.start()
@@ -72,6 +77,12 @@ class Destination(ABC):
         await self._notify_state_change("idle", "running")
 
     async def stop(self) -> None:
+        """Unsubscribe, drain what is buffered, and release resources.
+
+        Waits for the writer loop to finish, flushes the remaining buffer and
+        calls close(). Messages already accepted are written before this
+        returns.
+        """
         self._running = False
         if self._subscription_handle:
             self.broker.unsubscribe(self._subscription_handle)
@@ -152,7 +163,16 @@ class Destination(ABC):
             return 1.0
 
     @abstractmethod
-    async def write(self, message: Message) -> None: ...
+    async def write(self, message: Message) -> None:
+        """Write one message to the sink.
+
+        Raising is how a failure is signalled: the caller retries according to
+        the retry strategy, and routes the message to the dead-letter channel
+        if one is configured.
+
+        Args:
+            message: Message to write
+        """
 
     async def _notify_state_change(self, old_state: str, new_state: str) -> None:
         """Notify Observatory bridge of state change."""
@@ -165,7 +185,11 @@ class Destination(ABC):
                 _logger.warning("Observatory hook error", error=str(e))
 
     async def close(self) -> None:
-        pass
+        """Release resources held by the sink.
+
+        Called once by stop(), after the buffer has been flushed. The default
+        does nothing; override it to close a file handle or a connection.
+        """
 
     @property
     def is_running(self) -> bool:
