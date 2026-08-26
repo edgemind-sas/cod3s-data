@@ -108,8 +108,9 @@ messages. Only `block` produces it.
 `retry_attempts` times before a write is given up on.
 
 **Dead letter queue (DLQ)** — a channel messages are published to when a
-destination has exhausted its retries. Nothing subscribes to it unless you say
-so; a DLQ with no subscriber is a silent drop.
+destination has exhausted its retries. The message carries `dlq_*` tags saying
+which destination gave up, on what error, after how many attempts. Nothing
+subscribes to it unless you say so; a DLQ with no subscriber is a silent drop.
 
 **Metrics as messages** — the framework has no separate metrics system. Counts
 and rates are published on `_metrics.**` like any other message, so you observe

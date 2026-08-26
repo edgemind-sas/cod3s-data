@@ -63,9 +63,13 @@ want; none is committed to a release.
 | [#11](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/11) | `Sampler` — one message in N, unlike the time-based `throttle` | `évolution` |
 | [#12](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/12) | Dynamic channel names templated from the message | `évolution` |
 | [#13](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/13) | Strict mode for out-of-order messages | `évolution` |
-| [#14](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/14) | DLQ metadata enrichment | `évolution` |
 | [#15](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/15) | Tag filtering with OR semantics | `évolution` |
 | [#16](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/16) | `SourceStatus` — progress, ETA, error detail | `évolution` |
+
+[#14](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/14) is built — a
+message on a dead-letter channel now carries `dlq_*` tags saying which
+destination gave up, on what exception, after how many attempts. The reasoning
+for tags over a wrapper is in [docs/architecture.md](docs/architecture.md).
 
 Three entries from the same January roadmap have since been built under other
 names and are **not** listed: `ThresholdAlert` became `AlarmTransform`,

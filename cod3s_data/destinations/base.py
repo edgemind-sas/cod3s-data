@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 _logger = structlog.get_logger()
 
+# An exception message can be arbitrarily long — an InfluxDB rejection carries the
+# whole offending line protocol. Tags travel with the message into whatever reads
+# the dead-letter channel, so the detail is capped rather than passed through.
+DLQ_DETAIL_MAX_LEN = 200
+
 
 class RetryStrategy(Enum):
     """Retry backoff strategy."""
@@ -136,25 +141,78 @@ class Destination(ABC):
 
     async def _write_batch_with_retry(self, batch: list[Message]) -> None:
         for message in batch:
-            success = await self._write_with_retry(message)
-            if not success:
+            failure = await self._write_with_retry(message)
+            if failure is not None:
                 self._error_count += 1
                 if self.dlq_channel:
                     with contextlib.suppress(Exception):
-                        await self.broker.publish(self.dlq_channel, message)
+                        await self.broker.publish(
+                            self.dlq_channel, self.to_dead_letter(message, failure)
+                        )
 
-    async def _write_with_retry(self, message: Message) -> bool:
+    async def _write_with_retry(self, message: Message) -> Exception | None:
+        """Write with retries, returning None on success or the last failure.
+
+        The exception is returned rather than swallowed: it is the only thing
+        that can say *why* a message ends up on the dead-letter channel, and by
+        the time the caller has a bare False it is already gone.
+        """
+        # Reaching the end of the loop means every attempt failed, so this
+        # placeholder only ever survives when no attempt was made at all.
+        last_error: Exception = RuntimeError(
+            f"No write attempted: retry_attempts is {self.retry_attempts}"
+        )
         for attempt in range(self.retry_attempts):
             try:
                 await self.write(message)
                 self._message_count += 1
-                return True
-            except Exception:
+                return None
+            except Exception as e:
+                last_error = e
                 if attempt >= self.retry_attempts - 1:
-                    return False
+                    break
                 backoff = self._calculate_backoff(attempt)
                 await asyncio.sleep(backoff)
-        return False
+        return last_error
+
+    def to_dead_letter(self, message: Message, error: Exception) -> Message:
+        """Tag a message with why it is being routed to the dead-letter channel.
+
+        Without this the message arrives byte-for-byte identical to the one that
+        was published on the input channel — same key, same timestamp, same
+        value — so nothing distinguishes a failure from ordinary traffic, and the
+        reason has to be recovered by hand from the logs.
+
+        Tags rather than an envelope around the value: a consumer reading the
+        dead-letter channel as an ordinary stream keeps working. Private
+        attributes are not an option either — `Message._retry_count` exists but
+        `model_dump_json()` omits private state, so it would never reach that
+        consumer.
+
+        Args:
+            message: The message whose delivery was abandoned
+            error: The failure from the last attempt
+
+        Returns:
+            A copy carrying the `dlq_*` tags; the original is left untouched.
+        """
+        detail = str(error).strip() or type(error).__name__
+        if len(detail) > DLQ_DETAIL_MAX_LEN:
+            detail = detail[: DLQ_DETAIL_MAX_LEN - 1] + "\u2026"
+
+        tags = {
+            "dlq_destination": type(self).__name__,
+            # The pattern subscribed to, not the channel the message came in on:
+            # the broker knows it but drops it before calling the subscriber.
+            "dlq_channel_pattern": self.channel_pattern,
+            "dlq_error_type": type(error).__name__,
+            "dlq_error": detail,
+            # A failure means every attempt was spent, so the count is the budget.
+            "dlq_attempts": str(self.retry_attempts),
+        }
+        if self._component_id:
+            tags["dlq_component_id"] = self._component_id
+        return message.with_tags(**tags)
 
     def _calculate_backoff(self, attempt: int) -> float:
         if self.retry_strategy == RetryStrategy.EXPONENTIAL:

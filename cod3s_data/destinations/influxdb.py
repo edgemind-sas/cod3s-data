@@ -200,13 +200,17 @@ class InfluxDBDestination(Destination):
                 await self._write_api.write(bucket=self.bucket, record=points)
                 self._message_count += len(batch)
                 return
-            except Exception:
+            except Exception as e:
                 if attempt >= self.retry_attempts - 1:
                     self._error_count += len(batch)
                     if self.dlq_channel:
+                        # One failed HTTP call condemns the whole batch, so every
+                        # message in it carries the same reason.
                         for msg in batch:
                             with contextlib.suppress(Exception):
-                                await self.broker.publish(self.dlq_channel, msg)
+                                await self.broker.publish(
+                                    self.dlq_channel, self.to_dead_letter(msg, e)
+                                )
                     return
                 await asyncio.sleep(self._calculate_backoff(attempt))
 
