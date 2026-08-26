@@ -74,9 +74,10 @@ names and are **not** listed: `ThresholdAlert` became `AlarmTransform`,
 
 ## Housekeeping
 
-[#17](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/17) — the abandoned
-`old-devel` branch, tutorial scaffolding at the repository root, and the
-`.gitignore` rule that hides every JSON config file.
+None open. [#17](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/17) is
+done: `old-devel` is deleted, the tutorial scaffolding is gone from the
+repository root, and the `.gitignore` data rules are anchored to the root so
+they no longer need a negation for every config file they used to swallow.
 
 ---
 
