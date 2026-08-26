@@ -16,6 +16,7 @@ from cod3s_data.destinations import (
     InMemoryDestination,
     RetryStrategy,
 )
+from cod3s_data.destinations.base import DLQ_DETAIL_MAX_LEN
 from cod3s_data.sources import SequenceSource
 
 
@@ -310,6 +311,126 @@ class TestDestinationIntegration:
         messages = dest.get_all()
         assert len(messages) == 5
         assert [m.value for m in messages] == [0, 1, 2, 3, 4]
+
+        await dest.stop()
+        await broker.stop()
+
+
+class TestDeadLetterMetadata:
+    """A message on the dead-letter channel has to say why it is there.
+
+    Without these tags it arrives byte-for-byte identical to the one published
+    on the input channel, and nothing tells it apart from ordinary traffic.
+    """
+
+    def _failed(self, **kwargs) -> tuple[Message, Message]:
+        """Build a destination, condemn one message, return (original, dead letter)."""
+        broker = InMemoryBroker(enable_metrics=False)
+
+        class AlwaysFailingDestination(InMemoryDestination):
+            async def write(self, message: Message) -> None:
+                raise RuntimeError("Always fails")
+
+        dest = AlwaysFailingDestination(broker, "sensors.**", retry_attempts=3, **kwargs)
+        original = create_message(value=1.0).with_tags(printer="p3")
+        return original, dest.to_dead_letter(original, ConnectionRefusedError("connection refused"))
+
+    def test_carries_the_reason(self):
+        _, dead = self._failed()
+
+        assert dead.tags["dlq_error_type"] == "ConnectionRefusedError"
+        assert dead.tags["dlq_error"] == "connection refused"
+
+    def test_carries_the_failing_destination_and_its_pattern(self):
+        _, dead = self._failed()
+
+        assert dead.tags["dlq_destination"] == "AlwaysFailingDestination"
+        assert dead.tags["dlq_channel_pattern"] == "sensors.**"
+
+    def test_carries_the_attempt_count(self):
+        _, dead = self._failed()
+
+        # A message only reaches the DLQ once every attempt has been spent.
+        assert dead.tags["dlq_attempts"] == "3"
+
+    def test_keeps_the_original_tags(self):
+        _, dead = self._failed()
+
+        assert dead.tags["printer"] == "p3"
+
+    def test_leaves_the_original_message_untouched(self):
+        original, dead = self._failed()
+
+        assert original.tags == {"printer": "p3"}
+        assert dead is not original
+        assert dead.value == original.value
+        assert dead.key == original.key
+        assert dead.timestamp == original.timestamp
+
+    def test_component_id_only_when_the_framework_set_one(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        dest = InMemoryDestination(broker, "sensors.**")
+        message = create_message(value=1.0)
+
+        anonymous = dest.to_dead_letter(message, RuntimeError("boom"))
+        assert "dlq_component_id" not in anonymous.tags
+
+        dest._component_id = "dst-0"
+        identified = dest.to_dead_letter(message, RuntimeError("boom"))
+        assert identified.tags["dlq_component_id"] == "dst-0"
+
+    def test_long_detail_is_truncated(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        dest = InMemoryDestination(broker, "sensors.**")
+
+        dead = dest.to_dead_letter(create_message(value=1.0), RuntimeError("x" * 5000))
+
+        assert len(dead.tags["dlq_error"]) == DLQ_DETAIL_MAX_LEN
+        assert dead.tags["dlq_error"].endswith("…")
+
+    def test_silent_exception_falls_back_to_its_type(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        dest = InMemoryDestination(broker, "sensors.**")
+
+        dead = dest.to_dead_letter(create_message(value=1.0), TimeoutError())
+
+        assert dead.tags["dlq_error"] == "TimeoutError"
+
+    @pytest.mark.asyncio
+    async def test_the_tags_reach_the_dead_letter_channel(self):
+        """End to end: the enrichment survives the broker, not just the helper."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dead_letters: list[Message] = []
+
+        async def collect(msg: Message) -> None:
+            dead_letters.append(msg)
+
+        broker.subscribe("rebuts.**", collect)
+
+        class AlwaysFailingDestination(InMemoryDestination):
+            async def write(self, message: Message) -> None:
+                raise ValueError("field type conflict")
+
+        dest = AlwaysFailingDestination(
+            broker,
+            "sensors.temperature",
+            # One attempt: the retry loop breaks before any backoff sleep.
+            retry_attempts=1,
+            dlq_channel="rebuts.influxdb",
+        )
+        await dest.start()
+
+        await broker.publish("sensors.temperature", create_message(value=213.4))
+        await asyncio.sleep(0.3)
+
+        assert len(dead_letters) == 1
+        tags = dead_letters[0].tags
+        assert tags["dlq_error_type"] == "ValueError"
+        assert tags["dlq_error"] == "field type conflict"
+        assert tags["dlq_attempts"] == "1"
+        assert tags["dlq_destination"] == "AlwaysFailingDestination"
 
         await dest.stop()
         await broker.stop()

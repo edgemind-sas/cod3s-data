@@ -1174,6 +1174,27 @@ dlq_dest = InMemoryDestination(
 )
 ```
 
+The message arrives with its key, timestamp and value unchanged, plus tags
+saying why it is there. Without them it would be indistinguishable from
+ordinary traffic on any consumer reading both.
+
+| Tag | Contents |
+|---|---|
+| `dlq_error_type` | Exception class, e.g. `ConnectionRefusedError` |
+| `dlq_error` | Exception message, truncated to 200 characters; the class name when the exception carries no message |
+| `dlq_destination` | Class of the destination that gave up, e.g. `InfluxDBDestination` |
+| `dlq_channel_pattern` | Pattern that destination subscribes to |
+| `dlq_attempts` | Attempts spent — always the full `retry_attempts` budget, since a message only reaches the DLQ once it is exhausted |
+| `dlq_component_id` | Component id, present only for a pipeline built from a configuration file |
+
+`dlq_channel_pattern` is the pattern, not the channel the message was published
+on: the broker knows that channel but drops it before calling the subscriber.
+
+Tags rather than a wrapper around the value, so a consumer can read the
+dead-letter channel as an ordinary stream. Original tags are preserved, and the
+message published on the input channel is untouched — `Message` is immutable
+and the DLQ gets a copy.
+
 ## Performance Tuning
 
 ### Buffer Sizes

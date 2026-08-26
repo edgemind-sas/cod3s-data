@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -258,3 +259,55 @@ class TestWriteAndClose:
         dest = _make_destination()
         await dest.close()  # Should not raise
         assert dest._client is None
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter channel
+# ---------------------------------------------------------------------------
+
+
+class TestDeadLetter:
+    """This destination writes a whole batch in one call and keeps its own retry
+    loop, so it reaches the dead-letter channel by a different path than the
+    base class. It has to enrich the message just the same — and it is the
+    destination most likely to have a DLQ configured, being the one that talks
+    to a network service.
+    """
+
+    @pytest.mark.asyncio
+    async def test_batch_failure_tags_every_message(self) -> None:
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+
+        dead_letters: list[Message] = []
+
+        async def collect(msg: Message) -> None:
+            dead_letters.append(msg)
+
+        broker.subscribe("rebuts.**", collect)
+
+        dest = _make_destination(
+            broker=broker,
+            retry_attempts=1,
+            dlq_channel="rebuts.influxdb",
+        )
+        dest._client = MagicMock()
+        dest._write_api = AsyncMock()
+        dest._write_api.write.side_effect = ValueError("field type conflict")
+
+        batch = [_make_message(key="extruder", value=213.4), _make_message(key="bed", value=60.0)]
+        await dest._write_batch_with_retry(batch)
+        await asyncio.sleep(0.1)
+
+        assert len(dead_letters) == 2
+        for dead in dead_letters:
+            assert dead.tags["dlq_error_type"] == "ValueError"
+            assert dead.tags["dlq_error"] == "field type conflict"
+            assert dead.tags["dlq_destination"] == "InfluxDBDestination"
+            assert dead.tags["dlq_channel_pattern"] == "test.**"
+            assert dead.tags["dlq_attempts"] == "1"
+
+        assert {dead.key for dead in dead_letters} == {"extruder", "bed"}
+        assert dest.error_count == 2
+
+        await broker.stop()

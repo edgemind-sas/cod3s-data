@@ -147,6 +147,28 @@ channel, and a component that fails is isolated rather than fatal.
 The same principle explains why every Observatory hook is wrapped in a bare
 `except`: monitoring must never be able to break the thing it monitors.
 
+### A dead letter is tagged, not wrapped
+
+A message that reaches the dead-letter channel keeps its key, its timestamp and
+its value, and gains `dlq_*` tags: which destination gave up, on what
+exception, after how many attempts.
+
+The alternative was to wrap the value in a structure holding the original
+alongside the failure. Tags won because a dead-letter channel is still a
+channel: anything that can read the input stream can read this one, and a
+wrapper would break every such consumer. The cost is that `tags` is
+`dict[str, str]`, so the attempt count travels as `"3"`.
+
+Private state was not an option even though `Message._retry_count` exists and
+is unused — `model_dump_json()` omits private attributes, so nothing written to
+a file or a sink would ever carry it.
+
+Until 2026-08-26 the message was republished untouched. `_write_with_retry`
+returned a bare `bool` and discarded the exception, so by the time the caller
+knew a message had failed, the reason no longer existed anywhere in the
+process. That is the part that had to change first; the tags were the easy
+half.
+
 ---
 
 ## Observatory
