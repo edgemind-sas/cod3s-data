@@ -57,19 +57,17 @@ dmypy.json
 docs/_build/
 site/
 
-# Data files
-*.csv
-*.json
-*.jsonl
-!tests/fixtures/*.csv
-!tests/fixtures/*.json
-!tests/fixtures/*.jsonl
-# The '*.json' rule above is aimed at sample data, but it also swallows every
-# JSON config file in the tree. Frontend tooling config must stay versioned:
-# without the lockfile, CI has no reproducible 'npm ci'.
-!frontend/package.json
-!frontend/package-lock.json
-!frontend/tsconfig.json
+# Data files — what a pipeline writes when it is run from the repository root.
+#
+# Anchored with a leading slash, so it applies to the root and nowhere else. The
+# unanchored form swallowed every CSV and JSON in the tree, config files
+# included, and had to grow a negation for each one that needed to stay — which
+# is how frontend/package-lock.json went unversioned, leaving CI without the
+# lockfile its 'npm ci' depends on. Anything committed on purpose, in
+# tests/fixtures/ or frontend/, is no longer a special case to remember.
+/*.csv
+/*.json
+/*.jsonl
 
 # Frontend
 frontend/node_modules/
