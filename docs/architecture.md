@@ -174,6 +174,26 @@ have been invisible — while JSON stays readable in browser devtools and needs
 no decoding library on either side. Debuggability won over efficiency, on
 purpose.
 
+### The WebSocket protocol is defined by the code that sends it
+
+**Settled on 2026-08-26:** `observatory/models/` held Pydantic models —
+`WebSocketEvent`, a payload model per event, five debug commands — that read
+like the definition of the protocol. Nothing imported them. The bridge builds
+its event dictionaries itself and `routes/ws.py` dispatches on `data["type"]`,
+so the models sat beside that path rather than on it, which is what the 0 %
+coverage was reporting.
+
+They had also drifted from the shape they claimed to describe: no model for
+`param.updated`, none for the `pipeline.*`, `param.update` or `message.inspect`
+commands, and `message_id` and `label` absent from two payloads that carry them.
+Wiring them in would have meant writing them again, not connecting them.
+
+They were removed. A stale second description of a protocol is worse than none,
+because it invites a reader to trust it. If the protocol is ever worth
+validating rather than merely documenting, the schema should be written against
+the messages that actually cross the socket, alongside the tests that exercise
+them — [issue #6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6).
+
 ### ⚠ Canvas for the timeline — *diverged*
 
 **Decided:** render the timeline on a `<canvas>`, because SVG DOM manipulation
