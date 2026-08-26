@@ -29,6 +29,14 @@ class ConsoleDestination(Destination):
         self._stream: TextIO = sys.stdout if stream == "stdout" else sys.stderr
 
     async def write(self, message: Message) -> None:
+        """Print the message to the configured stream.
+
+        Emits JSON when `format` is "json", and a `timestamp [key] value` line
+        otherwise.
+
+        Args:
+            message: Message to print
+        """
         if self.format == "json":
             output = message.to_json()
         else:
@@ -70,6 +78,14 @@ class FileDestination(Destination):
         self._lock = asyncio.Lock()
 
     async def write(self, message: Message) -> None:
+        """Append the message to the file as one JSON line.
+
+        The file is opened on the first write and flushed on every one, so a
+        reader tailing it sees each message as it lands.
+
+        Args:
+            message: Message to append
+        """
         async with self._lock:
             if self._file_handle is None:
                 mode = "a" if self.append else "w"
@@ -78,6 +94,7 @@ class FileDestination(Destination):
             self._file_handle.flush()
 
     async def close(self) -> None:
+        """Close the file handle if one was opened."""
         if self._file_handle is not None:
             self._file_handle.close()
             self._file_handle = None
@@ -109,11 +126,18 @@ class InMemoryDestination(Destination):
         self._lock = asyncio.Lock()
 
     async def write(self, message: Message) -> None:
+        """Append the message to the in-memory list.
+
+        Args:
+            message: Message to store
+        """
         async with self._lock:
             self.messages.append(message)
 
     def get_all(self) -> list[Message]:
+        """Return a copy of the stored messages."""
         return self.messages.copy()
 
     def clear(self) -> None:
+        """Discard all stored messages."""
         self.messages.clear()

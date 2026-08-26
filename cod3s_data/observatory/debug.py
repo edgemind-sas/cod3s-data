@@ -39,6 +39,7 @@ class Breakpoint:
     hit_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the breakpoint as a JSON-serialisable dictionary."""
         return {
             "id": self.id,
             "channel_pattern": self.channel_pattern,
@@ -78,16 +79,34 @@ class BreakpointEvaluator:
         )
 
     def remove(self, breakpoint_id: str) -> None:
+        """Remove a breakpoint.
+
+        Args:
+            breakpoint_id: Identifier the breakpoint was added under
+
+        Raises:
+            KeyError: If no breakpoint carries that identifier
+        """
         if breakpoint_id not in self._breakpoints:
             raise KeyError(f"Breakpoint '{breakpoint_id}' not found")
         del self._breakpoints[breakpoint_id]
 
     def toggle(self, breakpoint_id: str, enabled: bool) -> None:
+        """Arm or disarm a breakpoint without removing it.
+
+        Args:
+            breakpoint_id: Identifier the breakpoint was added under
+            enabled: True to arm it, False to leave it in place but inert
+
+        Raises:
+            KeyError: If no breakpoint carries that identifier
+        """
         if breakpoint_id not in self._breakpoints:
             raise KeyError(f"Breakpoint '{breakpoint_id}' not found")
         self._breakpoints[breakpoint_id].enabled = enabled
 
     def list_all(self) -> list[dict[str, Any]]:
+        """Return every breakpoint as a dictionary, armed or not."""
         return [bp.to_dict() for bp in self._breakpoints.values()]
 
     def evaluate(
@@ -265,9 +284,23 @@ class DebugController:
         await self._pause_event.wait()
 
     def set_granularity(self, granularity: str) -> None:
+        """Set how far the pipeline advances on each step.
+
+        Args:
+            granularity: One of "message", "stage" or "breakpoint"
+
+        Raises:
+            ValueError: If the value is not a DebugGranularity member
+        """
         self._granularity = DebugGranularity(granularity)
 
     def set_slow_motion(self, enabled: bool, delay_ms: int = 500) -> None:
+        """Enable or disable the delay applied to every message.
+
+        Args:
+            enabled: Whether to slow the pipeline down
+            delay_ms: Delay per message; clamped to the 100..5000 ms range
+        """
         self._slow_motion = enabled
         self._slow_motion_delay_ms = max(100, min(5000, delay_ms))
 

@@ -611,6 +611,17 @@ class RelativeAlarmTransform(StatefulTransform):
     async def transform_with_state(
         self, message: Message, state: dict[str, Any]
     ) -> Message | list[Message] | None:
+        """Emit an alarm when the message key crosses into or out of tolerance.
+
+        Args:
+            message: Incoming measurement; ignored unless its value is numeric
+            state: Per-transform state holding the last status of each key
+
+        Returns:
+            An alarm message on an OK -> ACTIVE or ACTIVE -> CLEARED
+            transition, and None otherwise — including when the key has no
+            setpoint, and when the deviation has not changed side.
+        """
         if not isinstance(message.value, int | float):
             return None
         sp = self._resolve_setpoint(message.key)

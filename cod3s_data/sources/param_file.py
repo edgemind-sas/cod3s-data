@@ -41,6 +41,19 @@ class ParamFileSource(Source):
         self.flatten = flatten
 
     async def produce(self) -> AsyncIterator[Message]:
+        """Yield one message per parameter found in the file.
+
+        Every message carries the same timestamp, taken when the file is read.
+        Nested mappings become dotted keys when `flatten` is set, and are
+        yielded as whole values otherwise.
+
+        Yields:
+            One Message per parameter, keyed by the parameter name
+
+        Raises:
+            FileNotFoundError: If the parameter file does not exist
+            ValueError: If the file holds anything but a mapping at the top level
+        """
         if not self.file_path.exists():
             raise FileNotFoundError(f"Parameter file not found: {self.file_path}")
 

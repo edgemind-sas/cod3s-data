@@ -29,6 +29,7 @@ class JourneyStep:
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the journey step as a JSON-serialisable dictionary."""
         return asdict(self)
 
 
