@@ -115,8 +115,9 @@ test:
   extends: .python-job
   stage: test
   services:
+    # Pas d'`alias:` explicite : GitLab en dérive déjà un du nom de l'image, et
+    # le redéclarer le fait rejeter avec un avertissement à chaque exécution.
     - name: influxdb:2.7-alpine
-      alias: influxdb
       variables:
         DOCKER_INFLUXDB_INIT_MODE: setup
         DOCKER_INFLUXDB_INIT_USERNAME: admin
