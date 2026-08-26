@@ -33,14 +33,18 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 ## Tests and CI
 
-| # | | |
-|---|---|---|
-| [#7](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/7) | InfluxDB integration tests never run in CI | `tests` |
+None open. All three are settled.
 
 [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
 REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
 what the ticket predicted it would: every `/api/debug/*` route answered 500
 when the Observatory ran without `--debug`, which is the default.
+
+[#7](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/7) is fixed — the CI
+`test` job runs an InfluxDB service and the four integration tests run against
+it. `COD3S_TEST_INFLUXDB_REQUIRED` is what keeps them running: without it, a
+broken service would send them back to the silent skip that hid them, since a
+JUnit report does not distinguish "skipped" from "passed" at a glance.
 
 [#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
 public methods that carried no docstring now do, and

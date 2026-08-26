@@ -7,11 +7,19 @@ Start InfluxDB before running these tests::
 Run with::
 
     uv run pytest tests/integration/test_influxdb_integration.py -v -m integration
+
+Connection settings come from the environment, defaulting to what
+``docker-compose.influxdb.yml`` sets up, so a local run needs no configuration.
+CI points ``COD3S_TEST_INFLUXDB_URL`` at its ``services:`` host and sets
+``COD3S_TEST_INFLUXDB_REQUIRED``, which turns "no server, skip everything" into
+a failure — the reason these tests went unrun for so long is that skipping is
+indistinguishable from passing in a CI report.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime
 
 import pytest
@@ -26,12 +34,19 @@ from cod3s_data.destinations.influxdb import InfluxDBDestination  # noqa: E402
 from cod3s_data.sources import SequenceSource  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Connection constants (match docker-compose.influxdb.yml)
+# Connection settings — defaults match docker-compose.influxdb.yml
 # ---------------------------------------------------------------------------
-INFLUXDB_URL = "http://localhost:8086"
-INFLUXDB_TOKEN = "test-token"
-INFLUXDB_ORG = "cod3s"
-INFLUXDB_BUCKET = "test"
+INFLUXDB_URL = os.environ.get("COD3S_TEST_INFLUXDB_URL", "http://localhost:8086")
+INFLUXDB_TOKEN = os.environ.get("COD3S_TEST_INFLUXDB_TOKEN", "test-token")
+INFLUXDB_ORG = os.environ.get("COD3S_TEST_INFLUXDB_ORG", "cod3s")
+INFLUXDB_BUCKET = os.environ.get("COD3S_TEST_INFLUXDB_BUCKET", "test")
+
+# Set where a server is guaranteed to be there: the module then fails instead of
+# skipping, so a broken service cannot leave the job green.
+INFLUXDB_REQUIRED = os.environ.get("COD3S_TEST_INFLUXDB_REQUIRED", "") not in ("", "0", "false")
+
+# A container needs a moment to finish its setup before it answers a ping.
+STARTUP_TIMEOUT_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +63,22 @@ async def _influxdb_is_ready() -> bool:
         return ready
     except Exception:
         return False
+
+
+async def _wait_until_ready() -> bool:
+    """Poll until InfluxDB answers, or give up.
+
+    A single ping is enough locally, where the container has long been up. It is
+    not enough in CI, where the service starts alongside the job and spends a few
+    seconds on its initial setup.
+    """
+    deadline = asyncio.get_event_loop().time() + (STARTUP_TIMEOUT_S if INFLUXDB_REQUIRED else 0.0)
+    while True:
+        if await _influxdb_is_ready():
+            return True
+        if asyncio.get_event_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(1.0)
 
 
 async def _query_influxdb(flux_query: str) -> list[object]:
@@ -94,11 +125,18 @@ def event_loop():
 
 @pytest.fixture(scope="module", autouse=True)
 async def check_influxdb():
-    """Skip all tests in this module if InfluxDB is not running."""
-    if not await _influxdb_is_ready():
-        pytest.skip(
-            "InfluxDB is not running (start with: docker compose -f docker-compose.influxdb.yml up -d)"
+    """Wait for InfluxDB, then skip the module — or fail, if one was promised."""
+    if await _wait_until_ready():
+        return
+
+    message = f"InfluxDB did not answer at {INFLUXDB_URL}"
+    if INFLUXDB_REQUIRED:
+        pytest.fail(
+            f"{message} within {STARTUP_TIMEOUT_S:.0f}s, and "
+            "COD3S_TEST_INFLUXDB_REQUIRED is set. Check the service definition; "
+            "these tests must not be skipped where they are expected to run."
         )
+    pytest.skip(f"{message} (start with: docker compose -f docker-compose.influxdb.yml up -d)")
 
 
 # ---------------------------------------------------------------------------
