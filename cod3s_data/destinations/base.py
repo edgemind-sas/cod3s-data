@@ -184,10 +184,9 @@ class Destination(ABC):
         reason has to be recovered by hand from the logs.
 
         Tags rather than an envelope around the value: a consumer reading the
-        dead-letter channel as an ordinary stream keeps working. Private
-        attributes are not an option either — `Message._retry_count` exists but
-        `model_dump_json()` omits private state, so it would never reach that
-        consumer.
+        dead-letter channel as an ordinary stream keeps working. A private
+        attribute on `Message` is not an option either — `model_dump_json()`
+        omits private state, so the reason would never reach that consumer.
 
         Args:
             message: The message whose delivery was abandoned

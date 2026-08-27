@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Message(BaseModel):
@@ -58,11 +58,6 @@ class Message(BaseModel):
     id: UUID = Field(
         default_factory=uuid4, description="Unique message identifier (auto-generated)"
     )
-
-    # Internal metadata (private attributes - excluded from serialization)
-    _trace_id: str | None = PrivateAttr(default=None)
-    _retry_count: int = PrivateAttr(default=0)
-    _source_timestamp: datetime | None = PrivateAttr(default=None)
 
     # Configuration
     model_config = {
