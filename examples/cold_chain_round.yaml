@@ -1,0 +1,88 @@
+# Chaîne du froid — une tournée, et un journal de conformité injoignable
+#
+# Rejeu d'une heure de télémétrie d'un camion frigorifique à trois
+# compartiments, accéléré 120× : la démo dure une trentaine de secondes.
+#
+#   06:00 - 06:40  tournée normale, le groupe froid cycle autour des consignes
+#   06:40 - 06:48  à un arrêt de livraison, la porte du compartiment frais
+#                  reste ouverte : la température monte jusqu'à 16 °C
+#   06:48 - 07:00  porte refermée, le groupe redescend en température
+#
+# Les deux compartiments surgelés ne sortent jamais de leur plage. Seul le
+# compartiment frais déclenche une alarme — 13 relevés sur 60 hors plage.
+#
+# La seconde chose que montre la démo : le journal de conformité est écrit sur
+# un point de montage réseau qui n'existe pas. Les alarmes ne peuvent donc pas
+# être archivées. Sans métadonnées, elles arriveraient sur le canal de rebut
+# telles quelles, impossibles à distinguer d'un trafic normal. Avec, on sait
+# quelle destination a renoncé, sur quelle erreur, après combien de tentatives.
+#
+# Lancement :
+#   uv run cod3s-data run examples/cold_chain_round.yaml
+
+name: cold_chain_round
+display_name: "Chaîne du froid — tournée du matin"
+subtitle: "Trois compartiments, un arrêt de livraison qui dure trop"
+
+broker:
+  enable_metrics: true
+  history_size: 300
+
+sources:
+  - type: csv
+    label: "Sondes du camion"
+    description: "Un relevé par minute et par compartiment, sur une heure"
+    channel: capteurs.chambres
+    params:
+      file_path: examples/data/cold_chain_round.csv
+      key_column: compartment
+      timestamp_column: timestamp
+      value_column: celsius
+      tag_columns: [cargo]
+      replay: true
+      speed_factor: 120.0
+      rebase_timestamps: true
+
+transformations:
+  # Une seule alarme pour les trois compartiments : `setpoint` accepte un
+  # dictionnaire par clé, et l'état est suivi indépendamment pour chaque
+  # compartiment. Un compartiment en alarme n'affecte pas les autres.
+  - type: relative_alarm
+    label: "Alarme température"
+    input_channels: capteurs.chambres
+    output_channel: alarmes.temperature
+    params:
+      alarm_type_label: "hors_plage"
+      setpoint:
+        surgele_avant: -20.0
+        frais_arriere: 4.0
+        surgele_arriere: -20.0
+      tolerance_abs: 3.0
+
+destinations:
+  # Le journal de conformité — sur un partage réseau qui n'est pas monté.
+  # Trois tentatives, puis le message part sur le canal de rebut.
+  - type: file
+    label: "Journal de conformité"
+    description: "Archivage réglementaire des sorties de plage"
+    channel_pattern: alarmes.**
+    params:
+      file_path: /mnt/qualite-nfs/chaine-du-froid.jsonl
+      retry_attempts: 2
+      dlq_channel: rebuts.journal
+
+  # Ce que l'exploitant voit passer en temps réel.
+  - type: console
+    label: "Alarmes"
+    channel_pattern: alarmes.**
+    params:
+      format: text
+
+  # Ce qui n'a pas pu être archivé, et pourquoi. Format json : c'est dans les
+  # tags que se trouvent les métadonnées de rebut, et la sortie texte ne les
+  # affiche pas.
+  - type: console
+    label: "Rebuts du journal"
+    channel_pattern: rebuts.**
+    params:
+      format: json

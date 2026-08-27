@@ -1,0 +1,145 @@
+# Impression 3D — un incident de bout en bout
+#
+# Rejeu de 20 minutes de télémétrie d'un job PLA, accéléré 60× : la démo dure
+# une vingtaine de secondes. Les données sont fictives mais scriptées, pas
+# aléatoires — elles racontent un incident précis :
+#
+#   0 - 90 s     chauffe, la buse monte de 24 °C à 210 °C
+#   90 - 600 s   impression stable
+#   600 - 780 s  bouchon partiel : la buse dérive jusqu'à 197 °C
+#   700 - 760 s  la porte de l'atelier s'ouvre, un courant d'air refroidit le plateau
+#   780 - 870 s  l'opérateur purge la buse, la température remonte
+#   870 - 1200 s stable jusqu'à la fin du job
+#
+# Ce que la démo montre : un thermocouple sur une tête mobile est bruité, et ce
+# bruit fait battre l'alarme au franchissement du seuil. Le même signal, lissé
+# sur 30 secondes, franchit le seuil 3 fois au lieu de 45. C'est la différence
+# entre une alarme qu'un opérateur regarde et une alarme qu'il désactive.
+#
+# Lancement :
+#   uv run cod3s-data run examples/print_job_incident.yaml
+#
+# Pour ne voir que ce qu'un opérateur devrait voir :
+#   uv run cod3s-data run examples/print_job_incident.yaml | grep lisse
+#
+# Pour compter la différence :
+#   uv run cod3s-data run examples/print_job_incident.yaml | grep -c brut
+#   uv run cod3s-data run examples/print_job_incident.yaml | grep -c lisse
+
+name: print_job_incident
+display_name: "Impression 3D — un incident de bout en bout"
+subtitle: "Job PLA de 20 minutes rejoué en accéléré"
+
+broker:
+  enable_metrics: true
+  history_size: 500
+
+sources:
+  # Une seule source pour les deux capteurs : la colonne `sensor` devient la
+  # clé du message, la colonne `location` un tag.
+  - type: csv
+    label: "Télémétrie du job"
+    description: "20 minutes de relevés à 1 Hz, buse et plateau"
+    channel: sensors.raw
+    params:
+      file_path: examples/data/print_job_pla.csv
+      key_column: sensor
+      timestamp_column: timestamp
+      value_column: celsius
+      tag_columns: [location]
+      replay: true
+      speed_factor: 60.0
+      rebase_timestamps: true
+
+transformations:
+  # Les deux capteurs arrivent sur le même canal ; on les sépare, parce qu'ils
+  # n'ont ni la même consigne ni la même tolérance.
+  - type: filter
+    label: "Voie buse"
+    input_channels: sensors.raw
+    output_channel: sensors.extruder.raw
+    params:
+      predicate_code: "lambda msg: msg.key == 'extruder'"
+
+  - type: filter
+    label: "Voie plateau"
+    input_channels: sensors.raw
+    output_channel: sensors.bed.raw
+    params:
+      predicate_code: "lambda msg: msg.key == 'bed'"
+
+  # Moyenne glissante sur 30 relevés, soit 30 secondes de procédé thermique.
+  - type: moving_average
+    label: "Lissage buse (30 s)"
+    input_channels: sensors.extruder.raw
+    output_channel: sensors.extruder.smoothed
+    params:
+      window_type: count
+      window_size: 30
+      min_samples: 30
+
+  - type: moving_average
+    label: "Lissage plateau (30 s)"
+    input_channels: sensors.bed.raw
+    output_channel: sensors.bed.smoothed
+    params:
+      window_type: count
+      window_size: 30
+      min_samples: 30
+
+  # La même alarme, deux fois : une sur le signal brut, une sur le signal lissé.
+  # C'est la comparaison qui est l'objet de la démo.
+  - type: relative_alarm
+    label: "Alarme buse — signal brut"
+    input_channels: sensors.extruder.raw
+    output_channel: alarms.brut.extruder
+    params:
+      # Repris tel quel dans le champ `alarm_type` du message : c'est ce qui
+      # permet de distinguer les deux alarmes dans la sortie console, qui
+      # affiche la clé du message et non le canal.
+      alarm_type_label: "brut"
+      setpoint: 210.0
+      tolerance_abs: 5.0
+
+  - type: relative_alarm
+    label: "Alarme buse — signal lissé"
+    input_channels: sensors.extruder.smoothed
+    output_channel: alarms.lisse.extruder
+    params:
+      # Repris tel quel dans le champ `alarm_type` du message : c'est ce qui
+      # permet de distinguer les deux alarmes dans la sortie console, qui
+      # affiche la clé du message et non le canal.
+      alarm_type_label: "lisse"
+      setpoint: 210.0
+      tolerance_abs: 5.0
+
+  - type: relative_alarm
+    label: "Alarme plateau — signal brut"
+    input_channels: sensors.bed.raw
+    output_channel: alarms.brut.bed
+    params:
+      # Repris tel quel dans le champ `alarm_type` du message : c'est ce qui
+      # permet de distinguer les deux alarmes dans la sortie console, qui
+      # affiche la clé du message et non le canal.
+      alarm_type_label: "brut"
+      setpoint: 60.0
+      tolerance_abs: 3.0
+
+  - type: relative_alarm
+    label: "Alarme plateau — signal lissé"
+    input_channels: sensors.bed.smoothed
+    output_channel: alarms.lisse.bed
+    params:
+      # Repris tel quel dans le champ `alarm_type` du message : c'est ce qui
+      # permet de distinguer les deux alarmes dans la sortie console, qui
+      # affiche la clé du message et non le canal.
+      alarm_type_label: "lisse"
+      setpoint: 60.0
+      tolerance_abs: 3.0
+
+destinations:
+  - type: console
+    label: "Alarmes"
+    channel_pattern: alarms.**
+    params:
+      format: text
