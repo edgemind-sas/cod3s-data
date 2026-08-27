@@ -250,12 +250,29 @@ class Destination(ABC):
 
     @property
     def is_running(self) -> bool:
+        """Whether `start()` has been called and `stop()` has not.
+
+        False does not mean the destination is idle: the writer loop keeps
+        draining the buffer after this goes False, which is what makes a clean
+        shutdown lose nothing.
+        """
         return self._running
 
     @property
     def message_count(self) -> int:
+        """How many messages `write()` has accepted without raising.
+
+        Messages received but not yet written are not counted, and neither are
+        the ones that exhausted their retries — those are `error_count`.
+        """
         return self._message_count
 
     @property
     def error_count(self) -> int:
+        """How many messages were abandoned after every retry failed.
+
+        One per message, not one per attempt: a message given up on after three
+        tries counts once. These are the messages routed to `dlq_channel` when
+        one is configured.
+        """
         return self._error_count

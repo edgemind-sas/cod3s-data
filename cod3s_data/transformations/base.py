@@ -109,6 +109,7 @@ class Transformation(ABC):
 
     @property
     def is_running(self) -> bool:
+        """Whether `start()` has been called and `stop()` has not."""
         return self._running
 
 

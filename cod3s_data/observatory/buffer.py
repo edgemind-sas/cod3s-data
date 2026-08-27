@@ -112,12 +112,21 @@ class EventBuffer:
 
     @property
     def size(self) -> int:
+        """How many events the ring buffer currently holds."""
         return len(self._buffer)
 
     @property
     def max_size(self) -> int:
+        """The event count at which the oldest is evicted to make room."""
         return self._buffer.maxlen or 0
 
     @property
     def estimated_memory_mb(self) -> float:
+        """Approximate size of the buffered events, in mebibytes.
+
+        Estimated, and an undercount: it sums `sys.getsizeof()` of each event
+        and of its `data` dict, which measures the containers rather than what
+        they hold. Good enough to drive the secondary memory cap, not a figure
+        to report as the buffer's true footprint.
+        """
         return self._estimated_memory / (1024 * 1024)

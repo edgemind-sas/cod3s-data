@@ -57,17 +57,7 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 ## Tests and CI
 
-| # | | |
-|---|---|---|
-| [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) | 16 public properties have no docstring | `chore` |
-
-[#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is the sequel
-to #8, which covered methods and left properties out. The check has to read
-`p.fget.__doc__`, for the same reason the existing test reads `__doc__` rather
-than `inspect.getdoc`: the latter falls back to the base class and lets a mute
-override through.
-
-The four opened in August are settled.
+None open. The five opened in August are settled.
 
 [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
 REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
@@ -82,8 +72,12 @@ JUnit report does not distinguish "skipped" from "passed" at a glance.
 
 [#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
 public methods that carried no docstring now do, and
-`tests/unit/test_public_api_docstrings.py` fails if a new one appears. The
-sixteen public *properties* it does not cover are [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20).
+`tests/unit/test_public_api_docstrings.py` fails if a new one appears.
+
+[#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is fixed — the
+sequel to #8, covering the sixteen public *properties* it had left out. A
+second check reads them through `fget.__doc__`, because `inspect.getdoc` on a
+mute redefined property returns its parent's text and would let it through.
 
 [#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) is fixed —
 `tests/integration/test_example_scenarios.py` replays both scenario demos

@@ -78,6 +78,7 @@ class MessageDetailStore:
 
     @property
     def size(self) -> int:
+        """How many messages the cache holds, at most `max_entries`."""
         return len(self._store)
 
 
@@ -112,4 +113,9 @@ class JourneyStore:
 
     @property
     def size(self) -> int:
+        """How many traces the store holds, at most `max_entries`.
+
+        Traces, not steps: one trace is a whole journey through the pipeline,
+        and eviction drops the least recently touched journey entire.
+        """
         return len(self._store)
