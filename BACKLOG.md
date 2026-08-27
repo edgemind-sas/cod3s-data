@@ -1,8 +1,8 @@
 # Backlog
 
 The backlog lives in the **[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues)**.
-Everything below was opened there on 2026-08-24, after being verified against the
-code; this page is an index, not a second copy.
+Everything below was opened there in August 2026, after being verified against
+the code; this page is an index, not a second copy.
 
 Why an index rather than nothing: a clone should be able to say what is known to
 be broken without network access. Why not the full text: two places tracking the
@@ -14,15 +14,16 @@ cleanup recovering from.
 | # | | |
 |---|---|---|
 | [#18](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/18) | The WebSocket debug plane has three loose ends | `défaut` |
-| [#21](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/21) | `Message` carries two private attributes nothing uses | `défaut` |
 
-Both were found while doing other work, and neither blocks anything. #18
-gathers three separate faults in one subsystem: two replies the frontend routes
-nowhere, a `set_slow_motion` reply that announces a delay the controller then
-clamps, and a `debug.step` that holds the connection open with no answer when
-no traffic is flowing. #21 is five minutes of deletion.
+Found while doing other work, and blocking nothing. #18 gathers three separate
+faults in one subsystem: two replies the frontend routes nowhere, a
+`set_slow_motion` reply that announces a delay the controller then clamps, and
+a `debug.step` that holds the connection open with no answer when no traffic is
+flowing. Its first two parts have to be fixed on both sides in one change, or
+the payload shape drifts between them; the third needs a decision first —
+immediate acknowledgement then an event, or a timeout.
 
-The five defects opened in August are all settled.
+The six defects opened in August are all settled.
 
 [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
 package having no Observatory UI — the built artifact is now versioned and
@@ -40,23 +41,33 @@ marker count is capped at 1000, so the premise of the canvas decision never
 arises, while the cost that is real, the redraw rate, is now coalesced per
 animation frame.
 
+[#21](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/21) — private
+attributes on `Message` that nothing read or wrote — was deletion, for the
+reason that made them unusable in the first place: `model_dump_json()` omits
+private state, so `_retry_count` could never have reached a consumer of the
+dead-letter channel. That is what #14 records in
+[docs/architecture.md](docs/architecture.md), and the entry now says the
+attribute was removed rather than that it sits there unused. The ticket named
+two; the third in the same block, `_trace_id`, went with them, and `Message`
+now declares no private state at all. Correlating a message with the ones it
+produced is done — and stays done — in `observatory/bridge.py`, in a table of
+its own.
+
 The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 ## Tests and CI
 
 | # | | |
 |---|---|---|
-| [#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) | Nothing holds the numbers the scenario demos advertise | `tests` |
 | [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) | 16 public properties have no docstring | `chore` |
 
-[#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) is narrow but real: `examples/README.md` presents 70 alarms
-against 8 as the lesson of a demo, and `tests/unit/test_examples.py` only
-checks that the examples still build. A change to how `moving_average` windows
-or `relative_alarm` transitions would leave both demos running and the
-documentation wrong. [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is the sequel to #8, which covered
-methods and left properties out.
+[#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is the sequel
+to #8, which covered methods and left properties out. The check has to read
+`p.fget.__doc__`, for the same reason the existing test reads `__doc__` rather
+than `inspect.getdoc`: the latter falls back to the base class and lets a mute
+override through.
 
-The three opened in August are settled.
+The four opened in August are settled.
 
 [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
 REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
@@ -73,6 +84,15 @@ JUnit report does not distinguish "skipped" from "passed" at a glance.
 public methods that carried no docstring now do, and
 `tests/unit/test_public_api_docstrings.py` fails if a new one appears. The
 sixteen public *properties* it does not cover are [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20).
+
+[#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) is fixed —
+`tests/integration/test_example_scenarios.py` replays both scenario demos
+through the CLI and holds the counts the README prints: 70 raw alarms against 8
+smoothed, and the cold chain's two alarms reaching the dead-letter channel with
+their `dlq_*` tags while neither frozen compartment fires. Through the CLI
+rather than a Python assembly with a `collect` destination, because the numbers
+being defended are counts of console lines produced by the command the README
+tells a reader to type. It costs about fifty seconds of CI.
 
 ## Features designed but not built
 

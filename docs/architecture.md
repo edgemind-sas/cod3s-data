@@ -159,9 +159,10 @@ channel: anything that can read the input stream can read this one, and a
 wrapper would break every such consumer. The cost is that `tags` is
 `dict[str, str]`, so the attempt count travels as `"3"`.
 
-Private state was not an option even though `Message._retry_count` exists and
-is unused — `model_dump_json()` omits private attributes, so nothing written to
-a file or a sink would ever carry it.
+Private state was not an option either — `model_dump_json()` omits private
+attributes, so nothing written to a file or a sink would ever carry it. That is
+also why `Message._retry_count`, declared for this purpose and never used, was
+removed rather than wired in.
 
 Until 2026-08-26 the message was republished untouched. `_write_with_retry`
 returned a bare `bool` and discarded the exception, so by the time the caller
