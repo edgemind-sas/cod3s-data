@@ -11,7 +11,18 @@ cleanup recovering from.
 
 ## Defects
 
-None open. The five that were are all settled.
+| # | | |
+|---|---|---|
+| [#18](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/18) | The WebSocket debug plane has three loose ends | `défaut` |
+| [#21](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/21) | `Message` carries two private attributes nothing uses | `défaut` |
+
+Both were found while doing other work, and neither blocks anything. #18
+gathers three separate faults in one subsystem: two replies the frontend routes
+nowhere, a `set_slow_motion` reply that announces a delay the controller then
+clamps, and a `debug.step` that holds the connection open with no answer when
+no traffic is flowing. #21 is five minutes of deletion.
+
+The five defects opened in August are all settled.
 
 [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
 package having no Observatory UI — the built artifact is now versioned and
@@ -33,7 +44,19 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 ## Tests and CI
 
-None open. All three are settled.
+| # | | |
+|---|---|---|
+| [#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) | Nothing holds the numbers the scenario demos advertise | `tests` |
+| [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) | 16 public properties have no docstring | `chore` |
+
+[#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) is narrow but real: `examples/README.md` presents 70 alarms
+against 8 as the lesson of a demo, and `tests/unit/test_examples.py` only
+checks that the examples still build. A change to how `moving_average` windows
+or `relative_alarm` transitions would leave both demos running and the
+documentation wrong. [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is the sequel to #8, which covered
+methods and left properties out.
+
+The three opened in August are settled.
 
 [#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
 REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
@@ -48,8 +71,8 @@ JUnit report does not distinguish "skipped" from "passed" at a glance.
 
 [#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
 public methods that carried no docstring now do, and
-`tests/unit/test_public_api_docstrings.py` fails if a new one appears. Sixteen
-public *properties* are still undocumented; the check does not cover them.
+`tests/unit/test_public_api_docstrings.py` fails if a new one appears. The
+sixteen public *properties* it does not cover are [#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20).
 
 ## Features designed but not built
 
