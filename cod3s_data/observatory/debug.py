@@ -58,6 +58,12 @@ class BreakpointEvaluator:
 
     @property
     def has_breakpoints(self) -> bool:
+        """Whether at least one breakpoint is registered *and* enabled.
+
+        Read on every published message before evaluating anything, so that a
+        controller carrying only disabled breakpoints costs one `any()` rather
+        than a full evaluation.
+        """
         return any(bp.enabled for bp in self._breakpoints.values())
 
     def add(
@@ -205,18 +211,30 @@ class DebugController:
 
     @property
     def is_active(self) -> bool:
+        """Whether debug mode is engaged at all, in any of its three states.
+
+        True while RUNNING, PAUSED or STEPPING — running freely under debug
+        still counts, since breakpoints are evaluated there too.
+        """
         return self._state != DebugState.INACTIVE
 
     @property
     def state(self) -> DebugState:
+        """The current debug state: INACTIVE, RUNNING, PAUSED or STEPPING."""
         return self._state
 
     @property
     def granularity(self) -> DebugGranularity:
+        """How far a single step advances: MESSAGE, STAGE or BREAKPOINT."""
         return self._granularity
 
     @property
     def breakpoint_evaluator(self) -> BreakpointEvaluator:
+        """The evaluator holding this controller's breakpoints.
+
+        Exposed so the REST routes can add, remove and toggle breakpoints
+        without the controller proxying each operation.
+        """
         return self._breakpoint_evaluator
 
     async def pause(self) -> None:

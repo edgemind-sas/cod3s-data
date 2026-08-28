@@ -30,6 +30,7 @@ class WebSocketManager:
 
     @property
     def client_count(self) -> int:
+        """How many WebSocket clients are currently registered."""
         return len(self._clients)
 
     async def broadcast_event(self, event_type: str, payload: dict[str, Any]) -> None:

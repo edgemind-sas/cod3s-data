@@ -52,4 +52,9 @@ class MessageSampler:
 
     @property
     def strategy(self) -> str:
+        """The configured strategy: "none", "every_nth" or "time_based".
+
+        An unrecognised value is kept as given and behaves as "none", since
+        `should_process()` forwards everything it cannot match.
+        """
         return self._strategy
