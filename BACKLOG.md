@@ -127,8 +127,9 @@ Deliberately **not** ticketed. These were explored during design and no decision
 was taken; opening issues for them would misrepresent them as planned work.
 
 **Integration** — destinations for external databases (PostgreSQL, Redis);
-sources and destinations for message brokers (MQTT, Kafka, AMQP); HTTP and
-WebSocket sources; Prometheus and OpenTelemetry export.
+sources and destinations for message brokers (Kafka, AMQP, and an MQTT
+*destination* — the MQTT *source* now ships, see `sources/mqtt_source.py`); HTTP
+and WebSocket sources; Prometheus and OpenTelemetry export.
 
 **Scale** — a networked broker in place of the in-memory one; distributed
 processing across workers; persistent state backends for stateful

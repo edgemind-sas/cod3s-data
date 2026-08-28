@@ -4,14 +4,23 @@ import asyncio
 import csv
 import io
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from cod3s_data.broker.base import Broker, DeliveryGuarantee
 from cod3s_data.core.message import Message
 from cod3s_data.sources.base import BatchMode, Source
+
+_logger = structlog.get_logger()
+
+#: Matches the ``YYYY-MM-DD_HH-MM-SS`` stamp that recording systems commonly put
+#: at the head of a session's file name. Override via ``session_regex``.
+DEFAULT_SESSION_REGEX = r"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})"
 
 
 class FileSource(Source):
@@ -572,3 +581,266 @@ class DirectoryWatchSource(Source):
             },
             tags={},
         )
+
+
+class CSVDirectorySource(Source):
+    """
+    Watch a directory for new CSV files and tail them (REALTIME mode).
+
+    Sits between :class:`CSVWatchSource`, which tails one file known up front,
+    and :class:`DirectoryWatchSource`, which announces new files but does not
+    read them. Recording systems typically open a fresh CSV per run, named after
+    its start time, and append to it — this source follows that pattern:
+
+    - On startup, existing files are recorded but **ignored**: a restart does
+      not replay old runs.
+    - When a new file matching ``glob_pattern`` appears, its header is read and
+      subsequent rows are emitted as they are written.
+    - If another new file appears while one is being tailed, the source
+      **switches** to the newest; only one file is active at a time.
+    - A line that is still being written when the file is polled is held back
+      and completed on a later poll, rather than parsed short: dropping the
+      fragment would silently shift the remainder of the row into the wrong
+      columns.
+
+    Row parsing mirrors :class:`CSVSource`, so the same YAML parameters apply.
+
+    Args:
+        broker: Message broker
+        channel: Target channel
+        directory: Directory to watch
+        glob_pattern: Glob selecting the files to tail
+        poll_interval: Seconds between directory and file polls
+        delimiter: CSV separator
+        encoding: File encoding
+        timestamp_mode: ``iso``, ``epoch``, ``relative`` or ``now``
+        timestamp_column: Column holding the timestamp
+        timestamp_microseconds_column: Companion column for ``epoch`` mode
+        timestamp_base: Origin for ``relative`` mode; defaults to the session id
+            found in the file name
+        value_columns: Columns to keep; all of them when unset
+        column_mapping: Renaming applied to the kept columns
+        default_key: Message key
+        default_tags: Tags added to every message
+        filename_tag: Tag carrying the current file name
+        session_tag: Tag carrying the session id; None to drop it
+        session_regex: Pattern matched against the file name; group 1 is the
+            session id
+        session_time_format: ``strptime`` format used to read that session id as
+            the origin of ``relative`` mode
+        delivery_guarantee: Delivery guarantee
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        channel: str,
+        *,
+        directory: str | Path,
+        glob_pattern: str = "*.csv",
+        poll_interval: float = 1.0,
+        # --- CSV parsing ---
+        delimiter: str = ",",
+        encoding: str = "utf-8",
+        timestamp_mode: str = "iso",
+        timestamp_column: str = "timestamp",
+        timestamp_microseconds_column: str | None = None,
+        timestamp_base: str | None = None,
+        value_columns: list[str] | None = None,
+        column_mapping: dict[str, str] | None = None,
+        # --- Fixed key & tags ---
+        default_key: str | None = None,
+        default_tags: dict[str, str] | None = None,
+        filename_tag: str = "csv_file",
+        session_tag: str | None = None,
+        session_regex: str = DEFAULT_SESSION_REGEX,
+        session_time_format: str = "%Y-%m-%d_%H-%M-%S",
+        delivery_guarantee: DeliveryGuarantee = DeliveryGuarantee.AT_MOST_ONCE,
+    ) -> None:
+        super().__init__(broker, channel, BatchMode.REALTIME, delivery_guarantee)
+        self._directory = Path(directory)
+        self._glob_pattern = glob_pattern
+        self._poll_interval = poll_interval
+
+        self._delimiter = delimiter
+        self._encoding = encoding
+        self._timestamp_mode = timestamp_mode
+        self._timestamp_column = timestamp_column
+        self._timestamp_microseconds_column = timestamp_microseconds_column
+        self._timestamp_base = datetime.fromisoformat(timestamp_base) if timestamp_base else None
+        self._value_columns = value_columns
+        self._column_mapping = column_mapping or {}
+        self._default_key = default_key
+        self._default_tags = default_tags or {}
+        self._filename_tag = filename_tag
+        self._session_tag = session_tag
+        self._session_re = re.compile(session_regex)
+        self._session_time_format = session_time_format
+
+        # Runtime state
+        self._known_files: set[str] = set()
+        self._current_file: Path | None = None
+        self._file_handle: io.TextIOWrapper | None = None
+        self._file_position: int = 0
+        self._headers: list[str] = []
+        self._pending: str = ""
+
+    async def produce(self) -> AsyncIterator[Message]:
+        """Watch the directory and yield rows from the newest matching file."""
+        _logger.info(
+            "csv_directory.start",
+            directory=str(self._directory),
+            glob_pattern=self._glob_pattern,
+        )
+
+        # Record existing files so they are ignored.
+        self._known_files = {p.name for p in self._directory.glob(self._glob_pattern)}
+        _logger.info("csv_directory.existing_files_ignored", count=len(self._known_files))
+
+        row_count = 0
+        while self._running:
+            current_files = {p.name for p in self._directory.glob(self._glob_pattern)}
+            new_files = current_files - self._known_files
+            if new_files:
+                # Sorting by name is chronological when the name is date-prefixed.
+                latest = sorted(new_files)[-1]
+                _logger.info("csv_directory.new_file", file=latest)
+                self._switch_file(self._directory / latest)
+                self._known_files = current_files
+
+            if self._file_handle is not None:
+                for msg in self._read_new_lines():
+                    yield msg
+                    row_count += 1
+
+            await asyncio.sleep(self._poll_interval)
+
+        self._close_file()
+        _logger.info("csv_directory.done", rows=row_count)
+
+    async def _on_stop(self) -> None:
+        """Release the file handle when the source stops."""
+        self._close_file()
+
+    def _switch_file(self, path: Path) -> None:
+        """Close the previous file (if any) and open *path*, reading its header."""
+        self._close_file()
+        self._current_file = path
+        self._file_handle = open(path, encoding=self._encoding, newline="")  # noqa: SIM115
+        header_line = self._file_handle.readline()
+        reader = csv.reader(io.StringIO(header_line), delimiter=self._delimiter)
+        self._headers = next(reader, [])
+        self._file_position = self._file_handle.tell()
+        self._pending = ""
+
+    def _close_file(self) -> None:
+        """Close the current file handle if one is open."""
+        if self._file_handle is not None:
+            self._file_handle.close()
+            self._file_handle = None
+            self._current_file = None
+            self._headers = []
+            self._file_position = 0
+            self._pending = ""
+
+    def _read_new_lines(self) -> list[Message]:
+        """Parse the complete lines appended since the last poll.
+
+        The read can land mid-line: the writer is appending while this polls.
+        The trailing fragment is carried over to the next call instead of being
+        parsed on its own — a short row would otherwise be dropped and its tail
+        parsed as a whole row, putting every value in the wrong column.
+        """
+        if self._file_handle is None or self._current_file is None:
+            return []
+
+        self._file_handle.seek(self._file_position)
+        raw = self._file_handle.read()
+        self._file_position = self._file_handle.tell()
+        if not raw:
+            return []
+
+        lines = (self._pending + raw).split("\n")
+        self._pending = lines.pop()  # incomplete until a newline arrives
+
+        messages: list[Message] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            csv_row = next(csv.reader(io.StringIO(line), delimiter=self._delimiter), [])
+            if len(csv_row) != len(self._headers):
+                continue  # malformed row
+            messages.append(self._parse_row(dict(zip(self._headers, csv_row, strict=True))))
+        return messages
+
+    def _parse_row(self, row: dict[str, str]) -> Message:
+        """Convert one CSV row into a :class:`Message`."""
+        tags = dict(self._default_tags)
+        if self._current_file is not None:
+            tags[self._filename_tag] = self._current_file.name
+            if self._session_tag:
+                match = self._session_re.search(self._current_file.name)
+                tags[self._session_tag] = match.group(1) if match else self._current_file.stem
+
+        value: dict[str, float | str]
+        if self._value_columns:
+            value = {}
+            for col in self._value_columns:
+                if col in row:
+                    value[self._column_mapping.get(col, col)] = _try_float(row[col])
+        else:
+            value = {k: _try_float(v) for k, v in row.items()}
+
+        return Message(
+            key=self._default_key or "csv_row",
+            timestamp=self._parse_timestamp(row),
+            value=value,
+            tags=tags,
+        )
+
+    def _parse_timestamp(self, row: dict[str, str]) -> datetime:
+        """Read the row's timestamp, falling back to now() on a parse failure."""
+        try:
+            if self._timestamp_mode == "now":
+                return datetime.now(tz=UTC)
+            if self._timestamp_mode == "epoch":
+                seconds = int(row[self._timestamp_column])
+                microseconds = 0
+                if self._timestamp_microseconds_column:
+                    microseconds = int(row[self._timestamp_microseconds_column])
+                return datetime.fromtimestamp(seconds + microseconds / 1_000_000, tz=UTC)
+            if self._timestamp_mode == "relative":
+                offset = float(row[self._timestamp_column])
+                return self._relative_base() + timedelta(seconds=offset)
+            return datetime.fromisoformat(row[self._timestamp_column])
+        except (KeyError, ValueError) as exc:
+            _logger.warning("csv_directory.timestamp_parse_error", error=str(exc))
+            return datetime.now(tz=UTC)
+
+    def _relative_base(self) -> datetime:
+        """Origin for ``relative`` mode: explicit base, else the file's session id."""
+        base: datetime | None = self._timestamp_base
+        if base is None and self._current_file is not None:
+            match = self._session_re.search(self._current_file.name)
+            if match:
+                try:
+                    base = datetime.strptime(match.group(1), self._session_time_format)
+                except ValueError:
+                    # A custom session_regex may capture something this format
+                    # cannot read; fall back rather than kill the source.
+                    _logger.warning(
+                        "csv_directory.session_time_parse_error",
+                        session=match.group(1),
+                        format=self._session_time_format,
+                    )
+        if base is None:
+            base = datetime.now(tz=UTC)
+        return base if base.tzinfo else base.replace(tzinfo=UTC)
+
+
+def _try_float(val: str) -> float | str:
+    """Convert *val* to float when possible, otherwise return it unchanged."""
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return val

@@ -10,7 +10,9 @@ from cod3s_data.core.message import Message
 from cod3s_data.destinations import CollectDestination
 from cod3s_data.transformations import (
     AggregateTransform,
+    AlarmGateTransform,
     AlarmTransform,
+    BoundsAlarmTransform,
     DeviationFilterTransform,
     FilterTransform,
     MapTransform,
@@ -1374,3 +1376,241 @@ class TestRelativeAlarmTransform:
             RelativeAlarmTransform(
                 broker, "in", "out", setpoint=10.0, tolerance_pct=1.0, tolerance_abs=1.0
             )
+
+
+_TOL_MAP = {
+    "TopMIN": ("top", "min"),
+    "TopMAX": ("top", "max"),
+    "BottomMIN": ("bottom", "min"),
+    "BottomMAX": ("bottom", "max"),
+}
+
+
+def _make_bounds_message(bounds: dict[str, float]) -> Message:
+    return Message(key="setpoints", timestamp=datetime.now(UTC), value=bounds, tags={})
+
+
+class TestBoundsAlarmTransform:
+    @pytest.mark.asyncio
+    async def test_silent_until_both_bounds_known(self):
+        """A half-announced interval cannot be violated, so nothing is emitted."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        await transform.start()
+
+        # No bounds at all: a wild value stays silent.
+        await broker.publish("in", _make_message("top", 9999.0))
+        # Only the min: still incomplete.
+        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0}))
+        await broker.publish("in", _make_message("top", 9999.0))
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_transitions_only(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(
+            broker, "in", "out", bounds_map=_TOL_MAP, alarm_type_label="temperature"
+        )
+        await transform.start()
+
+        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
+        # ok, OVER (emit), still over (no emit), back in range (emit), ok (no emit)
+        for v in [300.0, 310.0, 320.0, 300.0, 301.0]:
+            await broker.publish("in", _make_message("top", v))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 2
+        assert msgs[0].key == "top.alarm"
+        assert msgs[0].value["status"] == "ACTIVE"
+        assert msgs[0].value["alarm_type"] == "temperature"
+        assert msgs[0].value["direction"] == "OVER"
+        assert msgs[0].value["original_value"] == {"actual": 310.0, "min": 295.0, "max": 305.0}
+        assert msgs[1].value["status"] == "CLEARED"
+        assert msgs[1].value["direction"] == ""
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_under_direction(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        await transform.start()
+
+        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
+        await broker.publish("in", _make_message("top", 280.0))
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all()[0].value["direction"] == "UNDER"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_bounds_move_while_running(self):
+        """The whole point of the transform: an operator widens the interval."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        await transform.start()
+
+        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
+        await broker.publish("in", _make_message("top", 310.0))  # ACTIVE
+        # Same reading, but the operator moves the ceiling above it.
+        await broker.publish("in", _make_bounds_message({"TopMAX": 315.0}))
+        await broker.publish("in", _make_message("top", 310.0))  # CLEARED
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.value["status"] for m in msgs] == ["ACTIVE", "CLEARED"]
+        assert msgs[1].value["original_value"]["max"] == 315.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_key_state(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        await transform.start()
+
+        await broker.publish(
+            "in",
+            _make_bounds_message(
+                {"TopMIN": 295.0, "TopMAX": 305.0, "BottomMIN": 95.0, "BottomMAX": 105.0}
+            ),
+        )
+        await broker.publish("in", _make_message("top", 310.0))
+        await broker.publish("in", _make_message("bottom", 100.0))  # fine, no emit
+        await broker.publish("in", _make_message("bottom", 90.0))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.key for m in msgs] == ["top.alarm", "bottom.alarm"]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_unmapped_setpoint_and_non_numeric_bound_ignored(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        await transform.start()
+
+        await broker.publish(
+            "in", _make_bounds_message({"Unknown": 1.0, "TopMIN": "n/a", "TopMAX": 305.0})
+        )
+        await broker.publish("in", _make_message("top", 999.0))
+        await asyncio.sleep(0.1)
+
+        # TopMIN never became a number, so the interval stays incomplete.
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_yaml_style_list_bounds_are_accepted(self):
+        """YAML gives lists where the API documents pairs."""
+        broker = InMemoryBroker(enable_metrics=False)
+        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map={"TopMIN": ["top", "min"]})
+        assert transform.bounds_map == {"TopMIN": ("top", "min")}
+
+    def test_malformed_bounds_map_raises(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError, match="must be a \\(key, side\\) pair"):
+            BoundsAlarmTransform(broker, "in", "out", bounds_map={"TopMIN": ["top"]})
+        with pytest.raises(ValueError, match="side must be 'min' or 'max'"):
+            BoundsAlarmTransform(broker, "in", "out", bounds_map={"TopMIN": ["top", "middle"]})
+
+
+class TestAlarmGateTransform:
+    @pytest.mark.asyncio
+    async def test_keeps_active_drops_cleared(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = AlarmGateTransform(broker, "in", "out")
+        await transform.start()
+
+        for status in ("ACTIVE", "CLEARED"):
+            await broker.publish(
+                "in",
+                Message(
+                    key="top.alarm",
+                    timestamp=datetime.now(UTC),
+                    value={
+                        "status": status,
+                        "alarm_type": "temperature",
+                        "original_value": {"actual": 310.0},
+                    },
+                    tags={"OF": "OF-1"},
+                ),
+            )
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 1
+        assert msgs[0].value == {"value": {"actual": 310.0}}
+        assert msgs[0].tags["alarm_name"] == "top"
+        assert msgs[0].tags["alarm_type"] == "temperature"
+        assert msgs[0].tags["OF"] == "OF-1"  # upstream tags survive
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_non_alarm_messages_are_dropped(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+
+        transform = AlarmGateTransform(broker, "in", "out")
+        await transform.start()
+
+        await broker.publish("in", _make_message("top", 42.0))  # numeric, not an alarm
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()

@@ -1,15 +1,26 @@
-"""Unit tests for file sources (FileSource, CSVSource, CSVWatchSource, DirectoryWatchSource)."""
+"""Unit tests for file sources.
+
+FileSource, CSVSource, CSVWatchSource, DirectoryWatchSource and
+CSVDirectorySource.
+"""
 
 import asyncio
 import contextlib
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from cod3s_data.broker import InMemoryBroker
 from cod3s_data.core.message import Message
-from cod3s_data.sources import CSVSource, CSVWatchSource, DirectoryWatchSource, FileSource
+from cod3s_data.sources import (
+    CSVDirectorySource,
+    CSVSource,
+    CSVWatchSource,
+    DirectoryWatchSource,
+    FileSource,
+)
 
 
 class TestFileSource:
@@ -1505,3 +1516,218 @@ class TestCSVWatchSourceNumericCoercion:
 
         assert len(received) == 1
         assert received[0].value == 42.5
+
+
+class TestCSVDirectorySource:
+    """Test CSVDirectorySource: tail the newest CSV appearing in a directory."""
+
+    @staticmethod
+    async def _collect(source, received, *, settle=0.35, actions=None):
+        """Run *source* long enough to observe *actions*, then stop it cleanly."""
+        task = asyncio.create_task(source.start())
+        await asyncio.sleep(0.15)  # let the source record the pre-existing files
+        if actions is not None:
+            await actions()
+        await asyncio.sleep(settle)
+        await source.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return received
+
+    @staticmethod
+    def _source(broker, directory, **kwargs):
+        params = {
+            "delimiter": ";",
+            "poll_interval": 0.05,
+            "timestamp_mode": "now",
+            "glob_pattern": "*_log.csv",
+        }
+        params.update(kwargs)
+        return CSVDirectorySource(broker, "test.channel", directory=str(directory), **params)
+
+    @pytest.mark.asyncio
+    async def test_existing_files_are_ignored(self, tmp_path: Path):
+        """A restart must not replay the run that was already on disk."""
+        (tmp_path / "2026-01-01_00-00-00_log.csv").write_text("a;b\n1;2\n")
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        await self._collect(self._source(broker, tmp_path), received)
+
+        assert received == []
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_new_file_is_tailed(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        path = tmp_path / "2026-01-01_00-00-00_log.csv"
+
+        async def actions():
+            path.write_text("temp;pressure\n300;35\n")
+            await asyncio.sleep(0.15)
+            with path.open("a") as fh:
+                fh.write("301;36\n")
+
+        await self._collect(self._source(broker, tmp_path), received, actions=actions)
+
+        assert [m.value for m in received] == [
+            {"temp": 300.0, "pressure": 35.0},
+            {"temp": 301.0, "pressure": 36.0},
+        ]
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_switches_to_the_newest_file(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        async def actions():
+            (tmp_path / "2026-01-01_00-00-00_log.csv").write_text("v\n1\n")
+            await asyncio.sleep(0.15)
+            (tmp_path / "2026-01-01_11-11-11_log.csv").write_text("v\n2\n")
+            await asyncio.sleep(0.15)
+
+        source = self._source(broker, tmp_path, session_tag="session")
+        await self._collect(source, received, actions=actions)
+
+        assert [m.value["v"] for m in received] == [1.0, 2.0]
+        assert [m.tags["session"] for m in received] == [
+            "2026-01-01_00-00-00",
+            "2026-01-01_11-11-11",
+        ]
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_partial_line_is_skipped_then_delivered(self, tmp_path: Path):
+        """A row still being written is picked up on a later poll, not dropped."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        path = tmp_path / "2026-01-01_00-00-00_log.csv"
+
+        async def actions():
+            path.write_text("a;b\n1;2\n3")  # last row half-written
+            await asyncio.sleep(0.15)
+            assert [m.value for m in received] == [{"a": 1.0, "b": 2.0}]
+            with path.open("a") as fh:
+                fh.write(";4\n")
+
+        await self._collect(self._source(broker, tmp_path), received, actions=actions)
+
+        assert [m.value for m in received] == [{"a": 1.0, "b": 2.0}, {"a": 3.0, "b": 4.0}]
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_value_columns_and_mapping(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        async def actions():
+            (tmp_path / "2026-01-01_00-00-00_log.csv").write_text(
+                "TemperatureTop;Pression;Force\n300;35;12\n"
+            )
+
+        source = self._source(
+            broker,
+            tmp_path,
+            value_columns=["TemperatureTop", "Pression"],
+            column_mapping={"TemperatureTop": "temperature_top", "Pression": "pressure"},
+            default_key="egm_reading",
+            default_tags={"source": "egm"},
+        )
+        await self._collect(source, received, actions=actions)
+
+        assert received[0].value == {"temperature_top": 300.0, "pressure": 35.0}
+        assert received[0].key == "egm_reading"
+        assert received[0].tags["source"] == "egm"
+        assert received[0].tags["csv_file"] == "2026-01-01_00-00-00_log.csv"
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_epoch_timestamp_mode(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        async def actions():
+            (tmp_path / "2026-01-01_00-00-00_log.csv").write_text(
+                "sec;usec;v\n1700000000;500000;1\n"
+            )
+
+        source = self._source(
+            broker,
+            tmp_path,
+            timestamp_mode="epoch",
+            timestamp_column="sec",
+            timestamp_microseconds_column="usec",
+        )
+        await self._collect(source, received, actions=actions)
+
+        assert received[0].timestamp == datetime.fromtimestamp(1700000000.5, tz=UTC)
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_relative_mode_bases_on_the_file_session(self, tmp_path: Path):
+        """Vision5D-style files count seconds from the start named in the file."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        async def actions():
+            (tmp_path / "2026-02-26_13-54-30_log.csv").write_text("t;v\n90.5;1\n")
+
+        source = self._source(broker, tmp_path, timestamp_mode="relative", timestamp_column="t")
+        await self._collect(source, received, actions=actions)
+
+        assert received[0].timestamp == datetime(2026, 2, 26, 13, 56, 0, 500000, tzinfo=UTC)
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_unparsable_timestamp_falls_back_to_now(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+        before = datetime.now(UTC)
+
+        async def actions():
+            (tmp_path / "2026-01-01_00-00-00_log.csv").write_text("ts;v\nnot-a-date;1\n")
+
+        source = self._source(broker, tmp_path, timestamp_mode="iso", timestamp_column="ts")
+        await self._collect(source, received, actions=actions)
+
+        assert received[0].timestamp >= before
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_values_stay_strings(self, tmp_path: Path):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        received: list[Message] = []
+        broker.subscribe("test.channel", lambda m: received.append(m))
+
+        async def actions():
+            (tmp_path / "2026-01-01_00-00-00_log.csv").write_text(
+                "error_type;tool_X\nOver Extrusion;723.5\n"
+            )
+
+        await self._collect(self._source(broker, tmp_path), received, actions=actions)
+
+        assert received[0].value == {"error_type": "Over Extrusion", "tool_X": 723.5}
+        await broker.stop()

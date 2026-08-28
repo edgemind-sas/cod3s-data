@@ -755,11 +755,15 @@ registry. Built-ins:
 | Source | `csv_watch` | `CSVWatchSource` |
 | Source | `directory_watch` | `DirectoryWatchSource` |
 | Source | `param_file` | `ParamFileSource` |
+| Source | `csv_directory` | `CSVDirectorySource` |
+| Source | `mqtt` | `MQTTSource` (needs the `mqtt` extra) |
 | Transformation | `filter` | `FilterTransform` |
 | Transformation | `map` | `MapTransform` |
 | Transformation | `aggregate` | `AggregateTransform` |
 | Transformation | `alarm` | `AlarmTransform` |
 | Transformation | `relative_alarm` | `RelativeAlarmTransform` |
+| Transformation | `bounds_alarm` | `BoundsAlarmTransform` |
+| Transformation | `alarm_gate` | `AlarmGateTransform` |
 | Transformation | `throttle` | `ThrottleTransform` |
 | Transformation | `unpack` | `UnpackTransform` |
 | Transformation | `moving_average` | `MovingAverageTransform` |

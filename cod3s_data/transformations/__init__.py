@@ -7,7 +7,9 @@ from cod3s_data.transformations.base import (
 )
 from cod3s_data.transformations.builtin import (
     AggregateTransform,
+    AlarmGateTransform,
     AlarmTransform,
+    BoundsAlarmTransform,
     DeviationFilterTransform,
     FilterTransform,
     MapTransform,
@@ -32,4 +34,6 @@ __all__ = [
     "MedianFilterTransform",
     "DeviationFilterTransform",
     "RelativeAlarmTransform",
+    "BoundsAlarmTransform",
+    "AlarmGateTransform",
 ]
