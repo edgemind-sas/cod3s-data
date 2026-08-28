@@ -675,3 +675,155 @@ class RelativeAlarmTransform(StatefulTransform):
             },
             tags={**message.tags},
         )
+
+
+class BoundsAlarmTransform(StatefulTransform):
+    """Alarm on a value leaving ``[min, max]``, with the bounds fed in live.
+
+    Completes the alarm family: :class:`AlarmTransform` compares against
+    thresholds fixed in the configuration, :class:`RelativeAlarmTransform`
+    against a setpoint, and this one against an interval that an operator can
+    move while the pipeline runs.
+
+    Two kinds of message arrive on ``input_channels``:
+
+    - **monitored values** — numeric messages whose key names the quantity
+      (e.g. ``temperature_top`` on ``sensors.smoothed.*``);
+    - **bound updates** — dict messages ``{<setpoint name>: <value>}``, usually
+      a side channel carrying an operator's edits. Each name is looked up in
+      ``bounds_map`` to learn which key and which side it sets.
+
+    State is per key, and only transitions are emitted (OK → ACTIVE,
+    ACTIVE → CLEARED), in the same shape as the rest of the alarm family. A key
+    stays silent until both of its bounds are known: an interval that has not
+    been announced yet cannot be violated.
+
+    Args:
+        broker: Message broker
+        input_channels: Channels carrying monitored values and bound updates
+        output_channel: Channel the alarms are published on
+        bounds_map: Setpoint name → ``(monitored key, "min" | "max")``
+        alarm_type_label: Value of the ``alarm_type`` field in emitted alarms
+
+    Raises:
+        ValueError: If a ``bounds_map`` entry is not a name/side pair, or names
+            a side other than ``min`` or ``max``
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        *,
+        bounds_map: dict[str, tuple[str, str] | list[str]],
+        alarm_type_label: str = "out_of_bounds",
+    ) -> None:
+        super().__init__(broker, input_channels, output_channel)
+        # YAML gives lists where the API documents pairs; normalise, and reject
+        # a malformed entry here rather than silently never alarming on it.
+        normalised: dict[str, tuple[str, str]] = {}
+        for name, mapping in bounds_map.items():
+            if len(mapping) != 2:
+                raise ValueError(
+                    f"bounds_map[{name!r}] must be a (key, side) pair, got {mapping!r}"
+                )
+            key, side = mapping
+            if side not in ("min", "max"):
+                raise ValueError(f"bounds_map[{name!r}] side must be 'min' or 'max', got {side!r}")
+            normalised[name] = (key, side)
+        self.bounds_map = normalised
+        self.alarm_type_label = alarm_type_label
+
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        """Record a bound update, or check a monitored value against its bounds.
+
+        Args:
+            message: A dict message updating bounds, or a numeric measurement
+            state: Per-transform state holding the bounds and status of each key
+
+        Returns:
+            An alarm message on an OK -> ACTIVE or ACTIVE -> CLEARED
+            transition, and None otherwise — including for every bound update,
+            and while a key's interval is still unknown.
+        """
+        bounds: dict[str, dict[str, float]] = state.setdefault("bounds", {})
+        status: dict[str, str] = state.setdefault("status", {})
+
+        # (1) Bound update: record it, never alarm on it.
+        if isinstance(message.value, dict):
+            for name, raw in message.value.items():
+                mapping = self.bounds_map.get(name)
+                if mapping is None:
+                    continue
+                try:
+                    limit = float(raw)
+                except (ValueError, TypeError):
+                    continue
+                key, side = mapping
+                bounds.setdefault(key, {})[side] = limit
+            return None
+
+        # (2) Monitored value: compare against the interval.
+        if not isinstance(message.value, int | float):
+            return None
+        current = bounds.get(message.key)
+        if not current or "min" not in current or "max" not in current:
+            return None  # interval not announced yet for this key
+        value = float(message.value)
+        low, high = current["min"], current["max"]
+        is_alarm = value < low or value > high
+        previous = status.get(message.key, "OK")
+
+        if is_alarm and previous == "OK":
+            status[message.key] = "ALARM"
+            return self._build(message, value, low, high, "ACTIVE")
+        if not is_alarm and previous == "ALARM":
+            status[message.key] = "OK"
+            return self._build(message, value, low, high, "CLEARED")
+        return None
+
+    def _build(
+        self, message: Message, value: float, low: float, high: float, status: str
+    ) -> Message:
+        direction = "" if status == "CLEARED" else ("OVER" if value > high else "UNDER")
+        return Message(
+            key=f"{message.key}.alarm",
+            timestamp=message.timestamp,
+            value={
+                "status": status,
+                "alarm_type": self.alarm_type_label,
+                "direction": direction,
+                "original_value": {"actual": value, "min": low, "max": high},
+            },
+            tags={**message.tags},
+        )
+
+
+class AlarmGateTransform(Transformation):
+    """Keep only the alarms that are ACTIVE, and label them by name.
+
+    Placed after the alarm transforms, it turns their output into something a
+    log or a notifier can consume directly: CLEARED messages are dropped, the
+    alarm's name (its key without the trailing ``.alarm``) and type move into
+    tags, and the value is reduced to the reading that triggered it.
+    """
+
+    async def transform(self, message: Message) -> Message | None:
+        """Forward an ACTIVE alarm with name and type as tags; drop anything else."""
+        if not isinstance(message.value, dict):
+            return None
+        if message.value.get("status") != "ACTIVE":
+            return None
+        return Message(
+            key=message.key,
+            timestamp=message.timestamp,
+            value={"value": message.value.get("original_value")},
+            tags={
+                **message.tags,
+                "alarm_name": message.key.removesuffix(".alarm"),
+                "alarm_type": str(message.value.get("alarm_type", "")),
+            },
+        )

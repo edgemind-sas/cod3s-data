@@ -17,17 +17,21 @@ from cod3s_data.destinations.core import ConsoleDestination, FileDestination, In
 from cod3s_data.destinations.influxdb import InfluxDBDestination
 from cod3s_data.sources.base import Source
 from cod3s_data.sources.file_sources import (
+    CSVDirectorySource,
     CSVSource,
     CSVWatchSource,
     DirectoryWatchSource,
     FileSource,
 )
+from cod3s_data.sources.mqtt_source import MQTTSource
 from cod3s_data.sources.param_file import ParamFileSource
 from cod3s_data.sources.test_sources import RandomSource, SequenceSource
 from cod3s_data.transformations.base import Transformation
 from cod3s_data.transformations.builtin import (
     AggregateTransform,
+    AlarmGateTransform,
     AlarmTransform,
+    BoundsAlarmTransform,
     DeviationFilterTransform,
     FilterTransform,
     MapTransform,
@@ -53,6 +57,8 @@ class ComponentFactory:
             "csv_watch": CSVWatchSource,
             "directory_watch": DirectoryWatchSource,
             "param_file": ParamFileSource,
+            "csv_directory": CSVDirectorySource,
+            "mqtt": MQTTSource,
         }
         self._transform_registry: dict[str, Callable[..., Transformation]] = {
             "filter": self._create_filter_transform,
@@ -65,6 +71,8 @@ class ComponentFactory:
             "median_filter": self._create_median_filter_transform,
             "deviation_filter": self._create_deviation_filter_transform,
             "relative_alarm": self._create_relative_alarm_transform,
+            "bounds_alarm": BoundsAlarmTransform,
+            "alarm_gate": AlarmGateTransform,
         }
         self._destination_registry: dict[str, Callable[..., Destination]] = {
             "console": ConsoleDestination,

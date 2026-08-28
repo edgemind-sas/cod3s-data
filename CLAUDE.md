@@ -13,6 +13,7 @@ between channels, destinations consume them.
 uv pip install -e ".[dev]"           # dev dependencies
 uv pip install -e ".[observatory]"   # Observatory (FastAPI/WebSocket UI)
 uv pip install -e ".[influxdb]"      # InfluxDB destination
+uv pip install -e ".[mqtt]"          # MQTTSource
 
 # Tests
 uv run pytest                        # all tests (coverage enabled by default)
@@ -52,11 +53,14 @@ cd frontend && npm run deploy        # build + copy into cod3s_data/observatory/
   time. Keeps bounded per-channel history.
 - **Sources** (`sources/`): `RandomSource`, `SequenceSource`, `FileSource`,
   `CSVSource` (polars), `CSVWatchSource`, `DirectoryWatchSource`,
-  `ParamFileSource`. Extend via `sources/base.py:Source`.
+  `CSVDirectorySource` (tails the newest CSV appearing in a directory),
+  `ParamFileSource`, `MQTTSource` (the only network source; needs the `mqtt`
+  extra). Extend via `sources/base.py:Source`.
 - **Transformations** (`transformations/`): `FilterTransform`, `MapTransform`,
   `AggregateTransform` (tumbling), `UnpackTransform`, `ThrottleTransform`,
   `MovingAverageTransform`, `MedianFilterTransform`,
-  `DeviationFilterTransform`, `AlarmTransform`, `RelativeAlarmTransform`.
+  `DeviationFilterTransform`, `AlarmTransform`, `RelativeAlarmTransform`,
+  `BoundsAlarmTransform` (interval fed in live), `AlarmGateTransform`.
   Extend via `transformations/base.py:Transformation`.
 - **Destinations** (`destinations/`): `ConsoleDestination`, `FileDestination`,
   `InMemoryDestination`, `CollectDestination`, `InfluxDBDestination`. Extend via
