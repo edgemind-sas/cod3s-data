@@ -55,29 +55,7 @@ C:\COD3S\
 
 ---
 
-## 3. Adapter le chemin de dependance locale
-
-Le fichier `gemini-pipeline\pyproject.toml` contient un chemin absolu Linux qu'il faut remplacer.
-
-Ouvrir `C:\COD3S\gemini-pipeline\pyproject.toml` dans un editeur de texte et remplacer la section :
-
-```toml
-[tool.uv.sources]
-cod3s-data = { path = "/home/gurvan/Dev/COD3S/cod3s-data", editable = true }
-```
-
-par :
-
-```toml
-[tool.uv.sources]
-cod3s-data = { path = "../cod3s-data", editable = true }
-```
-
-Sauvegarder le fichier.
-
----
-
-## 4a. Installer les dependances (avec uv)
+## 3a. Installer les dependances (avec uv)
 
 ### Installer cod3s-data
 
@@ -102,7 +80,7 @@ uv run cod3s-data --version
 
 ---
 
-## 4b. Installer les dependances (avec pip, sans uv)
+## 3b. Installer les dependances (avec pip, sans uv)
 
 ### Creer un environnement virtuel
 
@@ -134,38 +112,53 @@ cod3s-data --version
 
 ---
 
-## 5. Fichiers de donnees
+## 4. Choisir un exemple et ses donnees
 
-Copier les fichiers CSV dans le dossier `data` du pipeline :
-
-```
-C:\COD3S\gemini-pipeline\
-└── data\
-    ├── egm.csv          (~60 Mo)
-    └── vision5D.csv     (~77 Mo)
-```
-
-Creer le dossier `data` s'il n'existe pas :
+Il n'y a pas de pipeline a la racine de `gemini-pipeline`. Chaque exemple vit
+dans son propre dossier sous `examples\`, avec son `pipeline.yaml`, son
+`README.md` et son dossier `data\` :
 
 ```powershell
-mkdir C:\COD3S\gemini-pipeline\data
+dir C:\COD3S\gemini-pipeline\examples
+```
+
+```
+C:\COD3S\gemini-pipeline\examples\<exemple>\
+├── pipeline.yaml     ← le pipeline a lancer
+├── README.md         ← ce dont cet exemple a besoin
+└── data\             ← ses donnees
+```
+
+Certains exemples embarquent des donnees de demonstration et tournent tels
+quels. D'autres attendent des CSV que vous fournissez : leur `README.md` dit
+lesquels et dans quel sous-dossier de `data\` les poser. Lire ce fichier
+avant de lancer quoi que ce soit.
+
+Creer un sous-dossier manquant :
+
+```powershell
+mkdir C:\COD3S\gemini-pipeline\examples\<exemple>\data
 ```
 
 ---
 
-## 6. Lancer le pipeline avec l'Observatory
+## 5. Lancer un exemple avec l'Observatory
+
+Se placer **dans le dossier de l'exemple** : les chemins de son `pipeline.yaml`
+sont relatifs a ce dossier, donc le lancer d'ailleurs ne trouvera pas les
+donnees.
 
 ### Avec uv
 
 ```powershell
-cd C:\COD3S\gemini-pipeline
+cd C:\COD3S\gemini-pipeline\examples\<exemple>
 uv run cod3s-data run pipeline.yaml --observatory
 ```
 
 ### Avec pip (venv active)
 
 ```powershell
-cd C:\COD3S\gemini-pipeline
+cd C:\COD3S\gemini-pipeline\examples\<exemple>
 cod3s-data run pipeline.yaml --observatory
 ```
 
@@ -175,7 +168,8 @@ Ouvrir un navigateur a l'adresse :
 http://127.0.0.1:8765
 ```
 
-L'onglet **Topology** affiche le graphe du pipeline en temps reel avec les animations de flux de donnees.
+L'onglet **Topology** affiche le graphe du pipeline en temps reel avec les
+animations de flux de donnees.
 
 ### Options utiles
 
@@ -189,7 +183,7 @@ Pour arreter le pipeline : `Ctrl+C` dans le terminal.
 
 ---
 
-## 7. Depannage
+## 6. Depannage
 
 ### "uv : le terme 'uv' n'est pas reconnu"
 
@@ -212,6 +206,11 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 - Verifier que le pipeline tourne bien dans le terminal (pas d'erreur)
 - Verifier le port : `http://127.0.0.1:8765`
 - Si le pare-feu Windows affiche une alerte, autoriser Python / uvicorn sur le reseau prive
+
+### "Error: Configuration file not found: pipeline.yaml"
+
+Vous n'etes pas dans le dossier de l'exemple. Faire `cd` dans
+`C:\COD3S\gemini-pipeline\examples\<exemple>` avant de lancer la commande.
 
 ### Erreur "No module named 'cod3s_data'"
 
