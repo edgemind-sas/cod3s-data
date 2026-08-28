@@ -60,11 +60,16 @@ cod3s-data = "cod3s_data.cli:main"
 where = ["."]
 include = ["cod3s_data*"]
 
+# `py.typed` is what makes the annotations visible outside this package: without
+# it a downstream project's type checker treats every symbol here as `Any`, so a
+# plugin subclassing `Source` or `Transformation` is checked against nothing —
+# which is what the Gemini pipeline had to work around.
+#
 # The built Observatory UI. Without this, setuptools ships only .py files and
 # `pip install 'cod3s-data[observatory]'` serves a 404 on every page while the
 # REST and WebSocket APIs work — which is how the omission went unnoticed.
 [tool.setuptools.package-data]
-cod3s_data = ["observatory/static/**/*"]
+cod3s_data = ["py.typed", "observatory/static/**/*"]
 
 [tool.ruff]
 line-length = 100
