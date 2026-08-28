@@ -271,7 +271,8 @@ current state without replaying history — then streams events as they happen. 
 | `pipeline.state` | Result of a `pipeline.*` command |
 | `message.detail` | Result of `message.inspect`: the full message plus its journey |
 | `param.update_result` | Result of `param.update` |
-| `debug.paused`, `debug.resumed`, `debug.step_result`, `debug.granularity_set`, `debug.slow_motion_set` | Acknowledgements of the matching `debug.*` command |
+| `debug.paused`, `debug.resumed`, `debug.granularity_set`, `debug.slow_motion_set`, `debug.step_started` | The debug state after the matching `debug.*` command: `state`, `granularity`, `breakpoints`, `slow_motion`, `slow_motion_delay_ms`, `step_count` |
+| `debug.step_result` | The same state, plus `step` describing what the step did — which channel, or which breakpoint was hit |
 | `error` | `message` — a command failed |
 
 `value_preview` is `repr(message.value)` truncated to 120 characters. To get the
@@ -286,12 +287,24 @@ Same envelope, `payload` carrying the arguments.
 | `pipeline.start` / `pipeline.stop` / `pipeline.restart` | — | `pipeline.state` |
 | `message.inspect` | `message_id` | `message.detail`, or `error` if the message has fallen out of the cache |
 | `param.update` | `channel`, `value`, optional `key` | `param.update_result` |
-| `debug.pause` / `debug.resume` / `debug.step` | — | `debug.paused` / `debug.resumed` / `debug.step_result` |
+| `debug.pause` / `debug.resume` | — | `debug.paused` / `debug.resumed` |
+| `debug.step` | optional `granularity` | `debug.step_started` at once, then `debug.step_result` when the step happens |
 | `debug.set_granularity` | `granularity` | `debug.granularity_set` |
 | `debug.set_slow_motion` | `enabled`, `delay_ms` | `debug.slow_motion_set` |
 
 A `debug.*` command sent while debug mode is off is answered with `error` and
 the message `Debug mode is not enabled`.
+
+`debug.step` answers twice because a step advances when the next message
+arrives, and on a quiet pipeline that can be a long time or never.
+`debug.step_started` says the command was accepted and the step is waiting;
+`debug.step_result` follows if and when it occurs. An invalid `granularity`
+comes back as `error` on the command itself, not later as a stray event.
+
+Every debug reply carries the controller's whole state, so a client can apply
+any of them the same way. That matters for `debug.set_slow_motion`, which
+clamps `delay_ms` to the 100–5000 ms range: the reply reports the delay that was
+kept, which is not always the one that was asked for.
 
 ```json
 {"type": "param.update", "payload": {"channel": "params.extruder.setpoint", "value": 215.0}}

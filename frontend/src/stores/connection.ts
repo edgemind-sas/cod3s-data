@@ -149,7 +149,18 @@ export const useConnectionStore = defineStore('connection', () => {
 
       case 'debug.paused':
       case 'debug.resumed':
+      case 'debug.granularity_set':
+      case 'debug.slow_motion_set':
+        debugStore.updateFromServer(msg.payload as any)
+        break
+
+      case 'debug.step_started':
+        debugStore.setStepPending(true)
+        debugStore.updateFromServer(msg.payload as any)
+        break
+
       case 'debug.step_result':
+        debugStore.setStepPending(false)
         debugStore.updateFromServer(msg.payload as any)
         break
 

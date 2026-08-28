@@ -35,7 +35,8 @@
               </v-btn>
               <v-btn
                 color="info"
-                :disabled="debugStore.state !== 'paused'"
+                :disabled="debugStore.state !== 'paused' || debugStore.stepPending"
+                :loading="debugStore.stepPending"
                 @click="debug.step()"
               >
                 <v-icon>mdi-skip-next</v-icon>
@@ -46,6 +47,15 @@
           <v-col cols="auto">
             <v-chip size="small" variant="outlined">
               Steps: {{ debugStore.stepCount }}
+            </v-chip>
+          </v-col>
+          <v-col v-if="debugStore.stepPending" cols="auto">
+            <!-- A step advances when the next message arrives; on a quiet
+                 pipeline that can be a while, and silence would otherwise be
+                 indistinguishable from a lost command. -->
+            <v-chip size="small" color="info" variant="tonal">
+              <v-icon start size="small">mdi-timer-sand</v-icon>
+              Waiting for the next message
             </v-chip>
           </v-col>
         </v-row>

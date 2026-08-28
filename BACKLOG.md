@@ -11,19 +11,7 @@ cleanup recovering from.
 
 ## Defects
 
-| # | | |
-|---|---|---|
-| [#18](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/18) | The WebSocket debug plane has three loose ends | `défaut` |
-
-Found while doing other work, and blocking nothing. #18 gathers three separate
-faults in one subsystem: two replies the frontend routes nowhere, a
-`set_slow_motion` reply that announces a delay the controller then clamps, and
-a `debug.step` that holds the connection open with no answer when no traffic is
-flowing. Its first two parts have to be fixed on both sides in one change, or
-the payload shape drifts between them; the third needs a decision first —
-immediate acknowledgement then an event, or a timeout.
-
-The six defects opened in August are all settled.
+None open. The seven defects opened in August are all settled.
 
 [#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
 package having no Observatory UI — the built artifact is now versioned and
@@ -40,6 +28,17 @@ decided for canvas and rendered in SVG — was settled the other way round: the
 marker count is capped at 1000, so the premise of the canvas decision never
 arises, while the cost that is real, the redraw rate, is now coalesced per
 animation frame.
+
+[#18](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/18) — the three
+loose ends of the WebSocket debug plane — is fixed, and turned out to be four.
+Every debug reply now carries the controller's whole state, which is what makes
+the two orphan replies routable and what stops `set_slow_motion` announcing a
+delay it had already clamped; `debug.step_result` was the fourth, carrying a
+payload with no state field in it, so the client applied nothing. `debug.step`
+answers twice — `debug.step_started` at once, then the result if and when a
+message arrives — because the wait is unbounded by design and silence was
+indistinguishable from a lost command. Both sides moved in the same change, the
+protocol tables in [docs/observatory.md](docs/observatory.md) with them.
 
 [#21](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/21) — private
 attributes on `Message` that nothing read or wrote — was deletion, for the
