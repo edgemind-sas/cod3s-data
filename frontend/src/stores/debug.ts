@@ -9,6 +9,14 @@ export const useDebugStore = defineStore('debug', () => {
   const slowMotion = ref(false)
   const slowMotionDelayMs = ref(500)
   const stepCount = ref(0)
+  // A step waits for a message to flow; with a quiet pipeline that wait is
+  // unbounded, so the client is told the command was accepted and shows it as
+  // pending until the step actually happens.
+  const stepPending = ref(false)
+
+  function setStepPending(pending: boolean) {
+    stepPending.value = pending
+  }
 
   function updateFromServer(data: Partial<DebugInfo>) {
     if (data.state !== undefined) state.value = data.state
@@ -26,6 +34,8 @@ export const useDebugStore = defineStore('debug', () => {
     slowMotion,
     slowMotionDelayMs,
     stepCount,
+    stepPending,
+    setStepPending,
     updateFromServer,
   }
 })

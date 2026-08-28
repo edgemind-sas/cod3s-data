@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from cod3s_data.observatory.debug import DebugGranularity
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -22,6 +26,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     await websocket.accept()
     client_id = await ws_manager.connect(websocket)
+
+    # `debug.step` waits for traffic that may never come, so it runs outside the
+    # receive loop. The set both keeps the tasks referenced — asyncio only holds
+    # a weak reference, and an unreferenced task can be collected mid-wait — and
+    # gives the disconnect path something to cancel.
+    stepping: set[asyncio.Task[None]] = set()
 
     try:
         # Send initial state snapshot
@@ -49,22 +59,72 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         # Process incoming commands
         while True:
             data: dict[str, Any] = await websocket.receive_json()
-            response = await _handle_command(data, bridge, debug)
+            response = await _handle_command(data, bridge, debug, websocket, stepping)
             if response is not None:
                 await websocket.send_json(response)
 
     except WebSocketDisconnect:
         logger.info("Observatory client disconnected", client_id=client_id)
     finally:
+        for task in stepping:
+            task.cancel()
         ws_manager.disconnect(client_id)
+
+
+async def _run_step(websocket: WebSocket, debug: Any, granularity: str) -> None:
+    """Wait for one debug step to happen, then report it.
+
+    Runs as its own task because `DebugController.step()` waits on an event that
+    only a message flowing through the pipeline can set: awaiting it inside the
+    receive loop would hold the connection with no reply for as long as the
+    pipeline stays quiet. The client gets `debug.step_started` immediately and
+    this event whenever the step actually occurs.
+
+    Every send is guarded: by the time a step completes the client may be gone,
+    and a step that outlives its socket must not raise into the event loop.
+    """
+    try:
+        result = await debug.step(granularity)
+    except asyncio.CancelledError:
+        raise  # the client disconnected; the endpoint is cancelling us
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "id": "evt-err",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": {"message": str(e)},
+                }
+            )
+        return
+
+    with contextlib.suppress(Exception):
+        await websocket.send_json(
+            {
+                "type": "debug.step_result",
+                "id": "evt-dbg",
+                "timestamp": datetime.now(UTC).isoformat(),
+                # The state first, so the client can apply the whole payload the
+                # way it applies every other debug reply; `step` carries what is
+                # specific to this one — which message, or which breakpoint.
+                "payload": {**debug.get_state_dict(), "step": result},
+            }
+        )
 
 
 async def _handle_command(
     data: dict[str, Any],
     bridge: Any,
     debug: Any,
+    websocket: WebSocket | None = None,
+    stepping: set[asyncio.Task[None]] | None = None,
 ) -> dict[str, Any] | None:
-    """Dispatch a WebSocket command and return a response."""
+    """Dispatch a WebSocket command and return the immediate response.
+
+    `websocket` and `stepping` are only needed by `debug.step`, which answers
+    now and reports later; every other command is answered by its return value.
+    """
     cmd_type = data.get("type", "")
     payload = data.get("payload", {})
     now = datetime.now(UTC).isoformat()
@@ -135,12 +195,19 @@ async def _handle_command(
 
         if cmd_type == "debug.step":
             granularity = payload.get("granularity", "message")
-            result = await debug.step(granularity)
+            # Validated here rather than in the task: a bogus granularity is a
+            # client error and has to come back on the command, not minutes
+            # later as a stray event.
+            DebugGranularity(granularity)
+            if websocket is not None and stepping is not None:
+                task = asyncio.create_task(_run_step(websocket, debug, granularity))
+                stepping.add(task)
+                task.add_done_callback(stepping.discard)
             return {
-                "type": "debug.step_result",
+                "type": "debug.step_started",
                 "id": "evt-dbg",
                 "timestamp": now,
-                "payload": result,
+                "payload": debug.get_state_dict(),
             }
 
         if cmd_type == "debug.set_granularity":
@@ -150,7 +217,7 @@ async def _handle_command(
                 "type": "debug.granularity_set",
                 "id": "evt-dbg",
                 "timestamp": now,
-                "payload": {"granularity": granularity},
+                "payload": debug.get_state_dict(),
             }
 
         if cmd_type == "debug.set_slow_motion":
@@ -161,7 +228,10 @@ async def _handle_command(
                 "type": "debug.slow_motion_set",
                 "id": "evt-dbg",
                 "timestamp": now,
-                "payload": {"enabled": enabled, "delay_ms": delay_ms},
+                # The controller's state, not the request: it clamps the delay
+                # to 100..5000 ms, so echoing `delay_ms` back announced a value
+                # that was never applied.
+                "payload": debug.get_state_dict(),
             }
 
     except Exception as e:
