@@ -7,7 +7,9 @@ component via ``component._param_stores``. The owning component lifecycle
 
 Reads the latest value from broker history at ``start()`` so a transform
 that begins after the parameter source has already published is hydrated
-synchronously before its first data message arrives.
+synchronously before its first data message arrives. A merging store replays
+the whole recent history instead, since each message holds only a fragment of
+the value.
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ from cod3s_data.core.message import Message
 
 _logger = structlog.get_logger()
 
+#: Messages replayed at ``start()`` to rebuild a merging parameter. One message
+#: is enough when a store replaces its value; a merging one has to see every
+#: fragment, so it reaches back far enough to cover a session's worth of edits.
+MERGE_HISTORY = 500
+
 
 class ParameterStore:
     """Subscribes to a broker channel and rebinds an attribute on the owner."""
@@ -35,6 +42,7 @@ class ParameterStore:
         ref: str,
         default: Any = None,
         dict_key: str | None = None,
+        merge: bool = False,
     ) -> None:
         self.broker = broker
         self.owner = owner
@@ -42,6 +50,7 @@ class ParameterStore:
         self.ref = ref
         self.default = default
         self.dict_key = dict_key
+        self.merge = merge
 
         self._handle: SubscriptionHandle | None = None
         self._current: Any = default
@@ -52,10 +61,15 @@ class ParameterStore:
         return self._current
 
     async def start(self) -> None:
-        """Hydrate from history then subscribe for live updates."""
-        history = self.broker.get_history(self.ref, count=1)
-        if history:
-            await self._apply(history[0], emit_event=False)
+        """Hydrate from history then subscribe for live updates.
+
+        A merging store replays the recent history in order: each message
+        carries only part of the value, so keeping the last one would rebuild a
+        single fragment and silently lose the rest.
+        """
+        count = MERGE_HISTORY if self.merge else 1
+        for message in self.broker.get_history(self.ref, count=count):
+            await self._apply(message, emit_event=False)
 
         self._handle = self.broker.subscribe(self.ref, self._on_message)
 
@@ -107,6 +121,11 @@ class ParameterStore:
             if not isinstance(raw, dict):
                 return None
             return raw.get(self.dict_key)
+        if self.merge:
+            if not isinstance(raw, dict):
+                return None
+            current = self._current if isinstance(self._current, dict) else {}
+            return {**current, **raw}
         return raw
 
     def _owner_lock(self) -> asyncio.Lock | None:

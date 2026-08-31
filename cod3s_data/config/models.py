@@ -27,6 +27,11 @@ class ParamRef(BaseModel):
             ref: params.alarm
             key: extruder_tolerance
             default: 5.0
+          # accumulate partial dict updates instead of replacing the value
+          bounds:
+            ref: params.consignes
+            merge: true
+            default: {}
     """
 
     model_config = ConfigDict(frozen=True)
@@ -36,6 +41,14 @@ class ParamRef(BaseModel):
     key: str | None = Field(
         default=None,
         description="If the channel publishes dict-valued messages, extract this key",
+    )
+    merge: bool = Field(
+        default=False,
+        description=(
+            "Merge dict-valued messages into the current value instead of replacing it. "
+            "For parameters fed by partial updates, where each message carries only the "
+            "entries that changed."
+        ),
     )
 
 

@@ -24,6 +24,7 @@ from cod3s_data.transformations import (
     ThrottleTransform,
     UnpackTransform,
 )
+from cod3s_data.transformations.param_store import ParameterStore
 
 
 def create_message(key: str = "test", value: float = 42.0) -> Message:
@@ -1399,13 +1400,12 @@ class TestBoundsAlarmTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        # Only the min: the interval is incomplete.
+        transform = BoundsAlarmTransform(
+            broker, "in", "out", bounds_map=_TOL_MAP, bounds={"TopMIN": 295.0}
+        )
         await transform.start()
 
-        # No bounds at all: a wild value stays silent.
-        await broker.publish("in", _make_message("top", 9999.0))
-        # Only the min: still incomplete.
-        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0}))
         await broker.publish("in", _make_message("top", 9999.0))
         await asyncio.sleep(0.1)
 
@@ -1423,11 +1423,15 @@ class TestBoundsAlarmTransform:
         await dest.start()
 
         transform = BoundsAlarmTransform(
-            broker, "in", "out", bounds_map=_TOL_MAP, alarm_type_label="temperature"
+            broker,
+            "in",
+            "out",
+            bounds_map=_TOL_MAP,
+            bounds={"TopMIN": 295.0, "TopMAX": 305.0},
+            alarm_type_label="temperature",
         )
         await transform.start()
 
-        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
         # ok, OVER (emit), still over (no emit), back in range (emit), ok (no emit)
         for v in [300.0, 310.0, 320.0, 300.0, 301.0]:
             await broker.publish("in", _make_message("top", v))
@@ -1454,10 +1458,11 @@ class TestBoundsAlarmTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        transform = BoundsAlarmTransform(
+            broker, "in", "out", bounds_map=_TOL_MAP, bounds={"TopMIN": 295.0, "TopMAX": 305.0}
+        )
         await transform.start()
 
-        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
         await broker.publish("in", _make_message("top", 280.0))
         await asyncio.sleep(0.1)
 
@@ -1469,26 +1474,46 @@ class TestBoundsAlarmTransform:
 
     @pytest.mark.asyncio
     async def test_bounds_move_while_running(self):
-        """The whole point of the transform: an operator widens the interval."""
+        """The whole point of the transform: an operator widens the interval.
+
+        Wired the way the pipeline wires it — a merging ``ParameterStore`` on a
+        parameter channel — so this covers the seam between the two, not just
+        the comparison.
+        """
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        transform = BoundsAlarmTransform(
+            broker, "in", "out", bounds_map=_TOL_MAP, bounds={"TopMIN": 295.0, "TopMAX": 305.0}
+        )
+        store = ParameterStore(
+            broker=broker,
+            owner=transform,
+            param_name="bounds",
+            ref="params.tol",
+            default={"TopMIN": 295.0, "TopMAX": 305.0},
+            merge=True,
+        )
         await transform.start()
+        await store.start()
 
-        await broker.publish("in", _make_bounds_message({"TopMIN": 295.0, "TopMAX": 305.0}))
         await broker.publish("in", _make_message("top", 310.0))  # ACTIVE
-        # Same reading, but the operator moves the ceiling above it.
-        await broker.publish("in", _make_bounds_message({"TopMAX": 315.0}))
+        # Same reading, but the operator moves the ceiling above it — and sends
+        # only the bound that changed.
+        await broker.publish("params.tol", _make_bounds_message({"TopMAX": 315.0}))
+        await asyncio.sleep(0.05)
         await broker.publish("in", _make_message("top", 310.0))  # CLEARED
         await asyncio.sleep(0.1)
 
         msgs = dest.get_all()
         assert [m.value["status"] for m in msgs] == ["ACTIVE", "CLEARED"]
         assert msgs[1].value["original_value"]["max"] == 315.0
+        # The floor survived the partial update.
+        assert transform.bounds == {"TopMIN": 295.0, "TopMAX": 315.0}
 
+        await store.stop()
         await transform.stop()
         await dest.stop()
         await broker.stop()
@@ -1500,15 +1525,15 @@ class TestBoundsAlarmTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        transform = BoundsAlarmTransform(
+            broker,
+            "in",
+            "out",
+            bounds_map=_TOL_MAP,
+            bounds={"TopMIN": 295.0, "TopMAX": 305.0, "BottomMIN": 95.0, "BottomMAX": 105.0},
+        )
         await transform.start()
 
-        await broker.publish(
-            "in",
-            _make_bounds_message(
-                {"TopMIN": 295.0, "TopMAX": 305.0, "BottomMIN": 95.0, "BottomMAX": 105.0}
-            ),
-        )
         await broker.publish("in", _make_message("top", 310.0))
         await broker.publish("in", _make_message("bottom", 100.0))  # fine, no emit
         await broker.publish("in", _make_message("bottom", 90.0))
@@ -1528,16 +1553,19 @@ class TestBoundsAlarmTransform:
         dest = CollectDestination(broker, "out")
         await dest.start()
 
-        transform = BoundsAlarmTransform(broker, "in", "out", bounds_map=_TOL_MAP)
+        transform = BoundsAlarmTransform(
+            broker,
+            "in",
+            "out",
+            bounds_map=_TOL_MAP,
+            bounds={"Unknown": 1.0, "TopMIN": "n/a", "TopMAX": 305.0},
+        )
         await transform.start()
 
-        await broker.publish(
-            "in", _make_bounds_message({"Unknown": 1.0, "TopMIN": "n/a", "TopMAX": 305.0})
-        )
         await broker.publish("in", _make_message("top", 999.0))
         await asyncio.sleep(0.1)
 
-        # TopMIN never became a number, so the interval stays incomplete.
+        # TopMIN is not a number, so the interval stays unusable.
         assert dest.get_all() == []
 
         await transform.stop()

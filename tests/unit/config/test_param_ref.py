@@ -14,6 +14,12 @@ class TestParamRefValidation:
         assert ref.ref == "params.alarm.extruder"
         assert ref.default is None
         assert ref.key is None
+        assert ref.merge is False
+
+    def test_merge_ref(self):
+        ref = ParamRef(ref="params.consignes", merge=True, default={})
+        assert ref.merge is True
+        assert ref.default == {}
 
     def test_full_ref(self):
         ref = ParamRef(ref="params.alarm", default=200.0, key="extruder")
