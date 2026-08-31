@@ -1,6 +1,7 @@
 """Tests for Observatory Bridge."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -262,6 +263,46 @@ class TestTopologySnapshot:
         assert ("tfm-unpack", "tfm-viscosity") in edge_pairs
         assert ("tfm-unpack", "tfm-bead") in edge_pairs
         assert ("tfm-unpack", "dst-0") in edge_pairs
+
+    def test_parameter_edge_from_param_store(self):
+        """A ParamRef consumer subscribes through its store, not input_channels."""
+        bridge = _make_bridge()
+        tfm = _FakeTransformation("tfm-0", ["sensors.**"], "alerts.high")
+        tfm._param_stores = [
+            SimpleNamespace(param_name="bounds", ref="params.consignes"),
+        ]
+        bridge._framework = _FakeFramework(
+            sources=[
+                _FakeSource("src-0", "sensors.temperature"),
+                _FakeSource("src-1", "params.consignes"),
+            ],
+            transformations=[tfm],
+        )
+        result = bridge.get_topology_snapshot()
+
+        tfm_node = next(n for n in result["nodes"] if n["component_id"] == "tfm-0")
+        assert tfm_node["channels"]["parameters"] == [
+            {"param": "bounds", "channel": "params.consignes"}
+        ]
+        # The parameter channel is not a subscription: it must not show up there.
+        assert tfm_node["channels"]["subscribes"] == ["sensors.**"]
+
+        kinds = {(e["source_id"], e["target_id"]): e for e in result["edges"]}
+        assert kinds[("src-0", "tfm-0")]["kind"] == "data"
+        param_edge = kinds[("src-1", "tfm-0")]
+        assert param_edge["kind"] == "parameter"
+        assert param_edge["param"] == "bounds"
+        assert param_edge["channel"] == "params.consignes"
+
+    def test_no_param_stores_no_parameter_edge(self):
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "sensors.temperature")],
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "alerts.high")],
+        )
+        result = bridge.get_topology_snapshot()
+        assert all(e["kind"] == "data" for e in result["edges"])
+        assert result["nodes"][0]["channels"]["parameters"] == []
 
     def test_no_match_no_edge(self):
         bridge = _make_bridge()

@@ -51,6 +51,20 @@
             <div v-for="ch in data.channels.publishes" :key="ch" class="pipeline-node__channel">
               &rarr; {{ ch }}
             </div>
+            <div
+              v-for="p in data.channels.parameters || []"
+              :key="'param-'+p.param"
+              class="pipeline-node__channel pipeline-node__channel--param"
+            >
+              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            </div>
+            <Handle
+              v-if="(data.channels.parameters || []).length"
+              id="params"
+              type="target"
+              :position="Position.Bottom"
+              class="handle--param"
+            />
             <Handle type="source" :position="Position.Right" />
           </div>
         </template>
@@ -81,6 +95,20 @@
             <div v-for="ch in data.channels.publishes" :key="'out-'+ch" class="pipeline-node__channel">
               &rarr; {{ ch }}
             </div>
+            <div
+              v-for="p in data.channels.parameters || []"
+              :key="'param-'+p.param"
+              class="pipeline-node__channel pipeline-node__channel--param"
+            >
+              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            </div>
+            <Handle
+              v-if="(data.channels.parameters || []).length"
+              id="params"
+              type="target"
+              :position="Position.Bottom"
+              class="handle--param"
+            />
             <Handle type="source" :position="Position.Right" />
           </div>
         </template>
@@ -108,6 +136,20 @@
             <div v-for="ch in data.channels.subscribes" :key="ch" class="pipeline-node__channel">
               &larr; {{ ch }}
             </div>
+            <div
+              v-for="p in data.channels.parameters || []"
+              :key="'param-'+p.param"
+              class="pipeline-node__channel pipeline-node__channel--param"
+            >
+              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            </div>
+            <Handle
+              v-if="(data.channels.parameters || []).length"
+              id="params"
+              type="target"
+              :position="Position.Bottom"
+              class="handle--param"
+            />
           </div>
         </template>
         <template #edge-animated="edgeProps">
@@ -157,18 +199,27 @@ const flowNodes = computed<FlowNode[]>(() =>
 const flowEdges = computed<FlowEdge[]>(() =>
   topologyStore.edges
     .filter(e => e.source_id && e.target_id)
-    .map((e, i) => ({
-      id: `e-${e.source_id}-${e.target_id}-${i}`,
-      source: e.source_id,
-      target: e.target_id,
-      type: 'animated',
-      label: e.pattern,
-      markerEnd: { type: MarkerType.ArrowClosed },
-      data: {
-        channel: e.channel,
-        pattern: e.pattern,
-      },
-    }))
+    .map((e, i) => {
+      const isParam = e.kind === 'parameter'
+      return {
+        id: `e-${e.source_id}-${e.target_id}-${i}`,
+        source: e.source_id,
+        target: e.target_id,
+        // A parameter arrives on its own port, at the bottom: it configures the
+        // component, it does not feed it.
+        targetHandle: isParam ? 'params' : undefined,
+        type: 'animated',
+        // The channel is already written in the node; name the parameter instead.
+        label: isParam ? e.param : e.pattern,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        data: {
+          channel: e.channel,
+          pattern: e.pattern,
+          kind: e.kind ?? 'data',
+          param: e.param,
+        },
+      }
+    })
 )
 
 // --- Dagre layout ---
@@ -181,7 +232,9 @@ function applyDagreLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
     g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
   }
   for (const edge of edges) {
-    g.setEdge(edge.source, edge.target)
+    // Parameter edges connect without weighing on the ranking: the data flow
+    // keeps the left-to-right layout it would have without them.
+    g.setEdge(edge.source, edge.target, edge.data?.kind === 'parameter' ? { weight: 0 } : {})
   }
 
   dagre.layout(g)
@@ -238,30 +291,52 @@ function resetLayout() {
 }
 
 // --- Click-to-highlight ---
+// Parameter plane: violet, dashed. Distinct from the data flow at a glance,
+// and consistent with the dedicated port on the node.
+const PARAM_COLOR = '#B388FF'
+const PARAM_DASH = '6 4'
+
 const styledEdges = computed<FlowEdge[]>(() => {
   const sel = selectedNodeId.value
   return flowEdges.value.map(edge => {
+    const isParam = edge.data?.kind === 'parameter'
     if (!sel) {
       return {
         ...edge,
-        style: { stroke: 'rgba(255,255,255,0.25)', strokeWidth: 2 },
-        labelStyle: { fill: 'rgba(255,255,255,0.5)', fontSize: '10px' },
+        style: isParam
+          ? { stroke: PARAM_COLOR, strokeWidth: 2, strokeDasharray: PARAM_DASH, opacity: 0.75 }
+          : { stroke: 'rgba(255,255,255,0.25)', strokeWidth: 2 },
+        labelStyle: isParam
+          ? { fill: PARAM_COLOR, fontSize: '10px' }
+          : { fill: 'rgba(255,255,255,0.5)', fontSize: '10px' },
       }
     }
     if (edge.target === sel) {
-      // Incoming edge → blue
+      // Incoming edge → blue, or violet when it carries a parameter
       return {
         ...edge,
-        style: { stroke: '#42A5F5', strokeWidth: 3 },
-        labelStyle: { fill: '#42A5F5', fontSize: '10px', fontWeight: 'bold' },
+        style: isParam
+          ? { stroke: PARAM_COLOR, strokeWidth: 3, strokeDasharray: PARAM_DASH }
+          : { stroke: '#42A5F5', strokeWidth: 3 },
+        labelStyle: {
+          fill: isParam ? PARAM_COLOR : '#42A5F5',
+          fontSize: '10px',
+          fontWeight: 'bold',
+        },
       }
     }
     if (edge.source === sel) {
-      // Outgoing edge → orange
+      // Outgoing edge → orange, or violet when it carries a parameter
       return {
         ...edge,
-        style: { stroke: '#FFA726', strokeWidth: 3 },
-        labelStyle: { fill: '#FFA726', fontSize: '10px', fontWeight: 'bold' },
+        style: isParam
+          ? { stroke: PARAM_COLOR, strokeWidth: 3, strokeDasharray: PARAM_DASH }
+          : { stroke: '#FFA726', strokeWidth: 3 },
+        labelStyle: {
+          fill: isParam ? PARAM_COLOR : '#FFA726',
+          fontSize: '10px',
+          fontWeight: 'bold',
+        },
       }
     }
     // Dimmed
@@ -380,6 +455,21 @@ function stateColor(state: string): string {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.5);
   margin-top: 2px;
+}
+
+/* Parameter plane: same violet as its edges and its port. */
+.pipeline-node__channel--param {
+  color: #B388FF;
+}
+
+/* A parameter port is square, and sits at the bottom: a parameter configures
+   the component, it does not feed it. */
+:deep(.vue-flow__handle.handle--param) {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: #B388FF;
+  border: 1px solid #D1C4E9;
 }
 
 /* Force dark theme on Vuetify chips inside Vue Flow nodes */

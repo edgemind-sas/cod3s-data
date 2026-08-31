@@ -626,14 +626,30 @@ class ObservatoryBridge:
             )
         return components
 
+    @staticmethod
+    def _param_channels(component: Any) -> list[dict[str, str]]:
+        """Parameter channels a component reads through its ``ParameterStore``s."""
+        return [
+            {"param": store.param_name, "channel": store.ref}
+            for store in getattr(component, "_param_stores", [])
+        ]
+
     def get_topology_snapshot(self) -> dict[str, Any]:
-        """Get enriched topology with nodes (including channels) and computed edges."""
+        """Get enriched topology with nodes (including channels) and computed edges.
+
+        Edges come in two kinds. ``data`` edges pair a published channel with a
+        subscribed pattern, the ordinary flow. ``parameter`` edges pair it with a
+        ``ParamRef``: that consumer subscribes through its ``ParameterStore``,
+        never through ``input_channels``, so without this second pass a channel
+        that only feeds parameters would appear connected to nothing.
+        """
         if self._framework is None:
             return {"nodes": [], "edges": []}
 
         nodes: list[dict[str, Any]] = []
         publishers: list[tuple[str, str]] = []  # (component_id, channel)
         subscribers: list[tuple[str, str]] = []  # (component_id, pattern)
+        param_subscribers: list[tuple[str, str, str]] = []  # (component_id, ref, param)
 
         for source in self._framework.sources:
             state = "running" if source._running else "created"
@@ -647,10 +663,15 @@ class ObservatoryBridge:
                     "channels": {
                         "publishes": [source.channel],
                         "subscribes": [],
+                        "parameters": self._param_channels(source),
                     },
                 }
             )
             publishers.append((source._component_id, source.channel))
+            param_subscribers += [
+                (source._component_id, ref["channel"], ref["param"])
+                for ref in self._param_channels(source)
+            ]
 
         for tfm in self._framework.transformations:
             state = "running" if tfm._running else "created"
@@ -664,12 +685,17 @@ class ObservatoryBridge:
                     "channels": {
                         "publishes": [tfm.output_channel],
                         "subscribes": list(tfm.input_channels),
+                        "parameters": self._param_channels(tfm),
                     },
                 }
             )
             publishers.append((tfm._component_id, tfm.output_channel))
             for ch in tfm.input_channels:
                 subscribers.append((tfm._component_id, ch))
+            param_subscribers += [
+                (tfm._component_id, ref["channel"], ref["param"])
+                for ref in self._param_channels(tfm)
+            ]
 
         for dest in self._framework.destinations:
             state = "running" if dest._running else "created"
@@ -683,10 +709,15 @@ class ObservatoryBridge:
                     "channels": {
                         "publishes": [],
                         "subscribes": [dest.channel_pattern],
+                        "parameters": self._param_channels(dest),
                     },
                 }
             )
             subscribers.append((dest._component_id, dest.channel_pattern))
+            param_subscribers += [
+                (dest._component_id, ref["channel"], ref["param"])
+                for ref in self._param_channels(dest)
+            ]
 
         # Compute edges
         edges: list[dict[str, str]] = []
@@ -703,6 +734,23 @@ class ObservatoryBridge:
                             "target_id": sub_id,
                             "channel": channel,
                             "pattern": pattern,
+                            "kind": "data",
+                        }
+                    )
+
+        for pub_id, channel in publishers:
+            for sub_id, ref, param in param_subscribers:
+                if pub_id == sub_id:
+                    continue
+                if SubscriptionRegistry.matches(ref, channel) or ref.startswith(channel + "."):
+                    edges.append(
+                        {
+                            "source_id": pub_id,
+                            "target_id": sub_id,
+                            "channel": channel,
+                            "pattern": ref,
+                            "kind": "parameter",
+                            "param": param,
                         }
                     )
 
