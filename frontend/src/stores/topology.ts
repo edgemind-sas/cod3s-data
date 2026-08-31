@@ -102,13 +102,16 @@ export const useTopologyStore = defineStore('topology', () => {
       state: n.state,
       label: n.label || '',
       description: n.description || '',
-      channels: n.channels ?? { publishes: [], subscribes: [] },
+      channels: n.channels ?? { publishes: [], subscribes: [], parameters: [] },
     }))
     edges.value = data.edges.map(e => ({
       source_id: e.source_id,
       target_id: e.target_id,
       channel: e.channel,
       pattern: e.pattern,
+      // Kept: this is what tells a parameter edge from a data one.
+      kind: e.kind ?? 'data',
+      param: e.param,
     }))
   }
 
@@ -126,7 +129,7 @@ export const useTopologyStore = defineStore('topology', () => {
         state: data.new_state,
         label: data.label || '',
         description: '',
-        channels: { publishes: [], subscribes: [] },
+        channels: { publishes: [], subscribes: [], parameters: [] },
       })
     }
   }
@@ -138,6 +141,7 @@ export const useTopologyStore = defineStore('topology', () => {
         target_id: data.subscriber_id,
         channel: '',
         pattern: data.pattern,
+        kind: 'data',
       })
     } else if (data.action === 'unsubscribe') {
       edges.value = edges.value.filter(
