@@ -27,6 +27,14 @@ export type EventType =
 export interface ChannelInfo {
   publishes: string[]
   subscribes: string[]
+  /** Channels read as parameters (ParamRef), not as data */
+  parameters?: ParamChannel[]
+}
+
+/** A parameter a component reads from a broker channel */
+export interface ParamChannel {
+  param: string
+  channel: string
 }
 
 /** Topology node */
@@ -45,6 +53,10 @@ export interface TopologyEdge {
   target_id: string
   channel: string
   pattern: string
+  /** 'data' = ordinary flow, 'parameter' = feeds a ParamRef */
+  kind?: 'data' | 'parameter'
+  /** Name of the parameter fed, on 'parameter' edges */
+  param?: string
 }
 
 /** Message event data */

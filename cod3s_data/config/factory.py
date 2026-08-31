@@ -108,6 +108,7 @@ class ComponentFactory:
                         "ref": ref.ref,
                         "default": ref.default,
                         "key": ref.key,
+                        "merge": ref.merge,
                     }
                 )
             else:
@@ -128,6 +129,7 @@ class ComponentFactory:
                     ref=spec["ref"],
                     default=spec["default"],
                     dict_key=spec["key"],
+                    merge=spec["merge"],
                 )
             )
         owner._param_stores = stores

@@ -685,13 +685,16 @@ class BoundsAlarmTransform(StatefulTransform):
     against a setpoint, and this one against an interval that an operator can
     move while the pipeline runs.
 
-    Two kinds of message arrive on ``input_channels``:
+    The interval is not learned from the data stream: it is the ``bounds``
+    parameter, a mapping of setpoint name to value. Declared as a ``ParamRef``
+    with ``merge: true`` (see ``config/models.py``), it is rebound by a
+    :class:`~cod3s_data.transformations.param_store.ParameterStore` on every
+    message the operator publishes — one setpoint per message — and the whole
+    interval stays visible and editable in Observatory. ``input_channels``
+    therefore carries monitored values only.
 
-    - **monitored values** — numeric messages whose key names the quantity
-      (e.g. ``temperature_top`` on ``sensors.smoothed.*``);
-    - **bound updates** — dict messages ``{<setpoint name>: <value>}``, usually
-      a side channel carrying an operator's edits. Each name is looked up in
-      ``bounds_map`` to learn which key and which side it sets.
+    ``bounds_map`` says which key and which side each setpoint name sets, so
+    the machine's naming stays out of the mechanism.
 
     State is per key, and only transitions are emitted (OK → ACTIVE,
     ACTIVE → CLEARED), in the same shape as the rest of the alarm family. A key
@@ -700,8 +703,9 @@ class BoundsAlarmTransform(StatefulTransform):
 
     Args:
         broker: Message broker
-        input_channels: Channels carrying monitored values and bound updates
+        input_channels: Channels carrying the monitored values
         output_channel: Channel the alarms are published on
+        bounds: Setpoint name → bound value, usually a merging ``ParamRef``
         bounds_map: Setpoint name → ``(monitored key, "min" | "max")``
         alarm_type_label: Value of the ``alarm_type`` field in emitted alarms
 
@@ -717,12 +721,14 @@ class BoundsAlarmTransform(StatefulTransform):
         output_channel: str,
         *,
         bounds_map: dict[str, tuple[str, str] | list[str]],
+        bounds: dict[str, Any] | None = None,
         alarm_type_label: str = "out_of_bounds",
     ) -> None:
         super().__init__(broker, input_channels, output_channel)
         # YAML gives lists where the API documents pairs; normalise, and reject
         # a malformed entry here rather than silently never alarming on it.
         normalised: dict[str, tuple[str, str]] = {}
+        by_key: dict[str, dict[str, str]] = {}
         for name, mapping in bounds_map.items():
             if len(mapping) != 2:
                 raise ValueError(
@@ -732,48 +738,49 @@ class BoundsAlarmTransform(StatefulTransform):
             if side not in ("min", "max"):
                 raise ValueError(f"bounds_map[{name!r}] side must be 'min' or 'max', got {side!r}")
             normalised[name] = (key, side)
+            by_key.setdefault(key, {})[side] = name
         self.bounds_map = normalised
+        # Reverse view, built once: monitored key -> {"min": name, "max": name}.
+        self._sides_by_key = by_key
+        # Rebound wholesale by the ParameterStore, under the transform's lock.
+        self.bounds = dict(bounds or {})
         self.alarm_type_label = alarm_type_label
+
+    def _interval(self, key: str) -> tuple[float, float] | None:
+        """The ``[min, max]`` currently announced for ``key``, if it is complete."""
+        sides = self._sides_by_key.get(key)
+        if sides is None or "min" not in sides or "max" not in sides:
+            return None
+        try:
+            low = float(self.bounds[sides["min"]])
+            high = float(self.bounds[sides["max"]])
+        except (KeyError, ValueError, TypeError):
+            return None
+        return low, high
 
     async def transform_with_state(
         self, message: Message, state: dict[str, Any]
     ) -> Message | list[Message] | None:
-        """Record a bound update, or check a monitored value against its bounds.
+        """Check a monitored value against the interval currently announced.
 
         Args:
-            message: A dict message updating bounds, or a numeric measurement
-            state: Per-transform state holding the bounds and status of each key
+            message: A numeric measurement whose key names the quantity
+            state: Per-transform state holding the alarm status of each key
 
         Returns:
             An alarm message on an OK -> ACTIVE or ACTIVE -> CLEARED
-            transition, and None otherwise — including for every bound update,
-            and while a key's interval is still unknown.
+            transition, and None otherwise — including while a key's interval
+            is still unknown.
         """
-        bounds: dict[str, dict[str, float]] = state.setdefault("bounds", {})
-        status: dict[str, str] = state.setdefault("status", {})
-
-        # (1) Bound update: record it, never alarm on it.
-        if isinstance(message.value, dict):
-            for name, raw in message.value.items():
-                mapping = self.bounds_map.get(name)
-                if mapping is None:
-                    continue
-                try:
-                    limit = float(raw)
-                except (ValueError, TypeError):
-                    continue
-                key, side = mapping
-                bounds.setdefault(key, {})[side] = limit
-            return None
-
-        # (2) Monitored value: compare against the interval.
         if not isinstance(message.value, int | float):
             return None
-        current = bounds.get(message.key)
-        if not current or "min" not in current or "max" not in current:
+        interval = self._interval(message.key)
+        if interval is None:
             return None  # interval not announced yet for this key
+
+        status: dict[str, str] = state.setdefault("status", {})
         value = float(message.value)
-        low, high = current["min"], current["max"]
+        low, high = interval
         is_alarm = value < low or value > high
         previous = status.get(message.key, "OK")
 

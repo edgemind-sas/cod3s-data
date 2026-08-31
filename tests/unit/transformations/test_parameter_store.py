@@ -98,6 +98,76 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    async def test_merge_accumulates_partial_updates(self):
+        """Each message carries one entry; the others must survive."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        owner = SimpleNamespace(bounds={})
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+        await store.start()
+
+        await broker.publish("params.b", _msg({"TopMIN": 295.0}))
+        await asyncio.sleep(0.05)
+        await broker.publish("params.b", _msg({"TopMAX": 305.0}))
+        await asyncio.sleep(0.05)
+        await broker.publish("params.b", _msg({"TopMAX": 315.0}))
+        await asyncio.sleep(0.05)
+
+        assert owner.bounds == {"TopMIN": 295.0, "TopMAX": 315.0}
+        await store.stop()
+        await broker.stop()
+
+    async def test_merge_replays_whole_history_at_start(self):
+        """Hydrating from the last message only would rebuild a single entry."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        await broker.publish("params.b", _msg({"TopMIN": 295.0}))
+        await broker.publish("params.b", _msg({"TopMAX": 305.0}))
+        await asyncio.sleep(0.05)
+
+        owner = SimpleNamespace(bounds={})
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+        await store.start()
+
+        assert owner.bounds == {"TopMIN": 295.0, "TopMAX": 305.0}
+        await store.stop()
+        await broker.stop()
+
+    async def test_merge_ignores_non_dict_message(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        owner = SimpleNamespace(bounds={"TopMIN": 295.0})
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="bounds",
+            ref="params.b",
+            default={"TopMIN": 295.0},
+            merge=True,
+        )
+        await store.start()
+
+        await broker.publish("params.b", _msg(42.0))
+        await asyncio.sleep(0.05)
+
+        assert owner.bounds == {"TopMIN": 295.0}
+        await store.stop()
+        await broker.stop()
+
     async def test_unsubscribe_on_stop(self):
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
