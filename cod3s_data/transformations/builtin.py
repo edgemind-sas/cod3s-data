@@ -302,19 +302,18 @@ class UnpackTransform(Transformation):
             if not message.value:
                 return
 
-            # Dict: publish each entry on {output_channel}.{key}
-            out_messages: list[Message] = []
-            for k, v in message.value.items():
-                out_msg = Message(
-                    key=k,
-                    timestamp=message.timestamp,
-                    value=v,
-                    tags=message.tags,
-                )
-                out_messages.append(out_msg)
-                await self.broker.publish(f"{self.output_channel}.{k}", out_msg)
+            # Dict: one message per entry, on {output_channel}.{key}
+            out_messages: list[Message] = [
+                Message(key=k, timestamp=message.timestamp, value=v, tags=message.tags)
+                for k, v in message.value.items()
+            ]
 
-            # Observatory: PROCESSED
+            # Observatory: PROCESSED, before publishing and not after. It is
+            # what ties each output to the input it came from; publishing first
+            # meant the broker announced a message the Observatory did not yet
+            # know the parent of, which opened a fresh trace per output — the
+            # real trace then lost its PUBLISHED steps, and the orphans crowded
+            # out genuine journeys. The base class already had this order.
             if out_messages and self._bridge is not None:
                 try:  # noqa: SIM105
                     await self._bridge.on_message_processed(
@@ -326,6 +325,9 @@ class UnpackTransform(Transformation):
                     )
                 except Exception:
                     pass
+
+            for out_msg in out_messages:
+                await self.broker.publish(f"{self.output_channel}.{out_msg.key}", out_msg)
 
         except Exception:
             pass
@@ -431,9 +433,10 @@ class _SlidingWindowTransform(StatefulTransform):
                 return
 
             out_list = results if isinstance(results, list) else [results]
-            for result in out_list:
-                await self.broker.publish(f"{self.output_channel}.{result.key}", result)
 
+            # PROCESSED first, as in the base class: it is what links an output
+            # to its input, and the broker must not announce a message whose
+            # parent the Observatory has not been told about yet.
             if self._bridge is not None:
                 try:  # noqa: SIM105
                     await self._bridge.on_message_processed(
@@ -445,6 +448,9 @@ class _SlidingWindowTransform(StatefulTransform):
                     )
                 except Exception:
                     pass
+
+            for result in out_list:
+                await self.broker.publish(f"{self.output_channel}.{result.key}", result)
         except Exception:
             pass
 
