@@ -94,7 +94,21 @@ class Framework:
                 else:
                     obs_config = ObservatoryConfig()
             elif isinstance(observatory, ObservatoryConfig):
-                obs_config = observatory
+                # The caller's settings sit ON TOP of the file's, they do not
+                # replace them. `cod3s-data run --observatory` builds a config
+                # holding just a port, and taking it whole silently discarded
+                # the pipeline's own `observatory:` section — retention,
+                # watched channels, sampling, all of it — whenever the
+                # Observatory was started from the command line, which is how
+                # it is normally started.
+                if self.config.observatory:
+                    base = ObservatoryConfig.model_validate(self.config.observatory)
+                    explicit = {
+                        name: getattr(observatory, name) for name in observatory.model_fields_set
+                    }
+                    obs_config = base.model_copy(update=explicit)
+                else:
+                    obs_config = observatory
             else:
                 obs_config = ObservatoryConfig()
 

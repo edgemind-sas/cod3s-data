@@ -78,6 +78,39 @@
                 </template>
               </g>
 
+              <!-- Everything before the oldest retained message. Retention is
+                   counted in messages, not in seconds, so a fast pipeline fills
+                   the window only partly and the left of the plot is empty —
+                   which reads as a broken layout rather than as "nothing is
+                   kept from back then". Naming it costs one rectangle. -->
+              <g v-if="retentionEdgeX > 24">
+                <rect
+                  x="0"
+                  :y="AXIS_HEIGHT"
+                  :width="retentionEdgeX"
+                  :height="svgHeight - AXIS_HEIGHT"
+                  fill="rgba(255,255,255,0.025)"
+                />
+                <line
+                  :x1="retentionEdgeX"
+                  :y1="AXIS_HEIGHT"
+                  :x2="retentionEdgeX"
+                  :y2="svgHeight"
+                  stroke="#666"
+                  stroke-width="1"
+                  stroke-dasharray="3,3"
+                />
+                <text
+                  :x="retentionEdgeX - 8"
+                  :y="AXIS_HEIGHT + 14"
+                  text-anchor="end"
+                  fill="#777"
+                  font-size="10"
+                >
+                  beyond retention
+                </text>
+              </g>
+
               <!-- Lane separator lines -->
               <line
                 v-for="(_, idx) in messagesStore.channels"
@@ -136,6 +169,8 @@ import { channelColor } from '@/utils/channelColors'
 const AXIS_HEIGHT = 30
 const LANE_HEIGHT = 40
 const LANE_LABELS_WIDTH = 200
+// Smallest dot diameter: below this spacing, circles overlap outright.
+const DOT_MERGE_PX = 8
 
 const messagesStore = useMessagesStore()
 
@@ -307,12 +342,39 @@ const dots = computed<DotData[]>(() => {
   })
 })
 
+// Where the retained history begins. Left of it the store simply holds
+// nothing, however far back the window reaches.
+const retentionEdgeX = computed(() => {
+  const all = dots.value
+  if (!all.length) return 0
+  return Math.max(0, Math.min(all[0].x, svgWidth.value))
+})
+
 // Only what falls inside the window reaches the DOM. The store holds more than
 // the window shows — everything older has slid off the left edge — and every
 // circle costs two event listeners.
 const visibleDots = computed<DotData[]>(() => {
   const width = svgWidth.value
-  return dots.value.filter(dot => dot.x >= -8 && dot.x <= width + 8)
+  // Dots wider than the gap between them hide each other: at a few hundred
+  // messages per lane across a thousand pixels the lane is a solid bar, drawn
+  // with one circle and two listeners per message. Only the widest of each
+  // cluster is kept — the picture is the same, the DOM is a fraction of it.
+  const kept = new Map<string, DotData>()
+  const out: DotData[] = []
+  for (const dot of dots.value) {
+    if (dot.x < -8 || dot.x > width + 8) continue
+    const bin = `${dot.y}|${Math.round(dot.x / DOT_MERGE_PX)}`
+    const seen = kept.get(bin)
+    if (!seen) {
+      kept.set(bin, dot)
+      out.push(dot)
+    } else if (dot.r > seen.r) {
+      // Keep the bigger one in place, so a busy point still reads as busy.
+      out[out.indexOf(seen)] = dot
+      kept.set(bin, dot)
+    }
+  }
+  return out
 })
 
 // The pause button freezes the window instead of stopping a scroll: there is

@@ -32,6 +32,7 @@ def create_observatory(
     from cod3s_data.observatory.app import create_app
     from cod3s_data.observatory.bridge import ObservatoryBridge
     from cod3s_data.observatory.buffer import EventBuffer
+    from cod3s_data.observatory.channel_filter import ChannelFilter
     from cod3s_data.observatory.config import ObservatoryConfig
     from cod3s_data.observatory.debug import DebugController
     from cod3s_data.observatory.message_store import JourneyStore, MessageDetailStore
@@ -54,8 +55,9 @@ def create_observatory(
     )
     ws_manager = WebSocketManager()
     debug_controller = DebugController(enabled=config.debug.enabled)
+    channel_filter = ChannelFilter(include=config.channels.include, exclude=config.channels.exclude)
     message_store = MessageDetailStore(max_entries=config.retained_details)
-    journey_store = JourneyStore(max_entries=config.retained_details)
+    journey_store = JourneyStore(max_entries=config.retained_traces)
 
     # Create bridge
     bridge = ObservatoryBridge(
@@ -64,6 +66,7 @@ def create_observatory(
         websocket_manager=ws_manager,
         message_store=message_store,
         journey_store=journey_store,
+        channel_filter=channel_filter,
     )
 
     # Create FastAPI app

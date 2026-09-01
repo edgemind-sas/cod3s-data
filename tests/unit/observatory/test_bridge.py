@@ -921,3 +921,46 @@ class TestPublisherOfSubChannels:
 
         assert bridge._resolve_publisher("sensors.egm.pressure")[0] == "narrow"
         assert bridge._resolve_publisher("sensors.other.pressure")[0] == "wide"
+
+
+class TestChannelFiltering:
+    """An unwatched channel costs the Observatory nothing at all."""
+
+    async def test_unwatched_channel_is_not_recorded(self):
+        from cod3s_data.observatory.channel_filter import ChannelFilter
+
+        buffer = EventBuffer(max_size=100)
+        js = JourneyStore()
+        bridge = _make_bridge(buffer=buffer, journey_store=js)
+        bridge._channels = ChannelFilter(exclude=["influx.**"])
+        bridge._framework = _FakeFramework(
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "influx.smoothed")],
+            destinations=[_FakeDestination("dst-0", "influx.**")],
+        )
+
+        watched, ignored = _make_message(), _make_message()
+        await bridge.on_message_published("alerts.temperature", watched, 1)
+        await bridge.on_message_published("influx.smoothed", ignored, 1)
+        # The reception is skipped too: its publication was never observed.
+        await bridge.on_message_received("dst-0", "destination", ignored)
+
+        channels = [e["data"]["channel"] for e in buffer.get_recent(50, EventType.MESSAGE)]
+        assert channels == ["alerts.temperature"]
+        assert js.get_journey(str(ignored.id)) is None
+        assert js.get_journey(str(watched.id)) is not None
+
+    async def test_filtering_does_not_skew_the_sampler(self):
+        from cod3s_data.observatory.channel_filter import ChannelFilter
+
+        buffer = EventBuffer(max_size=100)
+        bridge = _make_bridge(buffer=buffer, sampler=MessageSampler(strategy="every_nth", rate=2))
+        bridge._channels = ChannelFilter(include=["alerts.**"])
+
+        # A hundred messages on an unwatched channel must not consume the
+        # sampling quota of the watched one.
+        for _ in range(100):
+            await bridge.on_message_published("influx.smoothed", _make_message(), 1)
+        for _ in range(2):
+            await bridge.on_message_published("alerts.temperature", _make_message(), 1)
+
+        assert buffer.size == 1

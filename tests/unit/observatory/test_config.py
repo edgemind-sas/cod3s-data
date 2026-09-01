@@ -73,13 +73,16 @@ class TestObservatoryConfig:
         assert config.enabled is True
         assert config.host == "127.0.0.1"
         assert config.port == 8765
-        assert config.history_size == 500
-        # One knob drives the three stores; the explicit caps stay unset so a
-        # listed row is always a row whose details and journey still exist.
+        assert config.history_size == 5000
+        # One knob for the two stores counted in messages, so a listed row is
+        # always a row whose details still exist. Journeys are counted in
+        # traces and carry their own budget.
         assert config.buffer_size is None
         assert config.message_detail_cache_size is None
-        assert config.retained_events == 500
-        assert config.retained_details == 500
+        assert config.retained_events == 5000
+        assert config.retained_details == 5000
+        assert config.journey_size == 500
+        assert config.retained_traces == 500
         assert config.memory_limit_mb == 50
         assert config.interactive is False
         assert isinstance(config.debug, DebugConfig)
@@ -169,6 +172,15 @@ class TestRetentionKnob:
         assert config.retained_events == 2000
         assert config.retained_details == 2000
 
+    def test_journeys_have_their_own_budget(self):
+        # A trace holds every step of a whole fan-out — some sixty of them for
+        # nineteen published messages — so tying it to `history_size` bought
+        # nineteen times more journey history than message history, at 26 kB a
+        # trace. Raising the message history must not drag it along.
+        config = ObservatoryConfig(history_size=50000)
+        assert config.retained_traces == 500
+        assert ObservatoryConfig(journey_size=2000).retained_traces == 2000
+
     def test_explicit_caps_win(self):
         config = ObservatoryConfig(
             history_size=500, buffer_size=4000, message_detail_cache_size=800
@@ -179,7 +191,66 @@ class TestRetentionKnob:
     def test_stores_are_built_from_the_knob(self):
         from cod3s_data.observatory import create_observatory
 
-        bridge = create_observatory(ObservatoryConfig(history_size=120))
+        bridge = create_observatory(ObservatoryConfig(history_size=120, journey_size=60))
         assert bridge._buffer.max_size == 120
         assert bridge._message_store._max_entries == 120
-        assert bridge._journey_store._max_entries == 120
+        assert bridge._journey_store._max_entries == 60
+
+
+class TestChannelEnvOverrides:
+    """Channel patterns are overridable like every other Observatory setting."""
+
+    def test_lists_come_from_comma_separated_variables(self, monkeypatch):
+        from cod3s_data.config.loaders import load_dict
+
+        monkeypatch.setenv("COD3S_OBSERVATORY_CHANNELS_EXCLUDE", "influx.**, sensors.egm.*")
+        monkeypatch.setenv("COD3S_OBSERVATORY_CHANNELS_INCLUDE", "alerts.**")
+
+        config = load_dict({"name": "p", "sources": [], "destinations": []})
+
+        # `PipelineConfig.observatory` stays a plain dict; the section is
+        # validated when the Observatory is built from it.
+        assert config.observatory is not None
+        observatory = ObservatoryConfig.model_validate(config.observatory)
+        assert observatory.channels.exclude == ["influx.**", "sensors.egm.*"]
+        assert observatory.channels.include == ["alerts.**"]
+
+
+class TestCliOverridesDoNotReplaceTheFile:
+    """`--observatory` must not discard the pipeline's own section.
+
+    The CLI builds an `ObservatoryConfig` holding just a port and the
+    interactive flag. Taking it whole threw away everything the file declared —
+    retention, watched channels, sampling — every time the Observatory was
+    started from the command line, which is how it is normally started.
+    """
+
+    def _framework(self, observatory_section, passed):
+        from cod3s_data.config.models import PipelineConfig
+        from cod3s_data.framework import Framework
+
+        config = PipelineConfig(
+            name="p", sources=[], destinations=[], observatory=observatory_section
+        )
+        return Framework(config, observatory=passed)._bridge
+
+    def test_file_settings_survive_a_cli_port(self):
+        bridge = self._framework(
+            {"history_size": 1234, "journey_size": 77, "channels": {"exclude": ["influx.**"]}},
+            ObservatoryConfig(port=9100),
+        )
+        assert bridge._buffer.max_size == 1234
+        assert bridge._journey_store._max_entries == 77
+        assert bridge._channels.observes("influx.smoothed") is False
+        assert bridge._channels.observes("alerts.temperature") is True
+
+    def test_what_the_caller_sets_still_wins(self):
+        bridge = self._framework(
+            {"history_size": 1234},
+            ObservatoryConfig(port=9100, history_size=50),
+        )
+        assert bridge._buffer.max_size == 50
+
+    def test_without_a_section_the_caller_config_is_used_as_is(self):
+        bridge = self._framework(None, ObservatoryConfig(port=9100, history_size=321))
+        assert bridge._buffer.max_size == 321

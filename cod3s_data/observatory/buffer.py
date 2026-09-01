@@ -39,6 +39,11 @@ class ObservatoryEvent:
         }
 
 
+# Snapshot messages sent on connection. At ~314 bytes each this is well under
+# the 1 MiB WebSocket frame limit, with room for the rest of the payload.
+SNAPSHOT_MESSAGES = 2000
+
+
 class EventBuffer:
     """Fixed-size ring buffer for observatory events.
 
@@ -104,9 +109,21 @@ class EventBuffer:
         return messages[-limit:]
 
     def get_snapshot(self) -> dict[str, Any]:
-        """Get full state snapshot for late-connecting frontends."""
+        """Get full state snapshot for late-connecting frontends.
+
+        Messages follow the buffer's capacity rather than a fixed hundred: the
+        retention is a setting now, and a client keeping thousands of messages
+        that is handed a hundred spends the next minute filling up from the
+        live stream while the server already holds the history it is missing.
+
+        Capped all the same, because the whole snapshot travels as one
+        WebSocket frame and the usual limit is 1 MiB — measured at 314 bytes a
+        message, five thousand of them made a 1.5 MB frame that a standard
+        client refuses outright. Beyond the cap the client fills the rest from
+        the live stream, as it always did.
+        """
         return {
-            "messages": self.get_recent(100, EventType.MESSAGE),
+            "messages": self.get_recent(min(self.max_size, SNAPSHOT_MESSAGES), EventType.MESSAGE),
             "component_states": self.get_recent(50, EventType.COMPONENT_STATE),
             "metrics": self.get_recent(50, EventType.METRIC),
             "errors": self.get_recent(20, EventType.ERROR),

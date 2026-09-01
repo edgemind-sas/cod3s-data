@@ -11,6 +11,7 @@ import structlog
 
 from cod3s_data.core.subscription_registry import SubscriptionRegistry
 from cod3s_data.observatory.buffer import EventBuffer, EventType, ObservatoryEvent
+from cod3s_data.observatory.channel_filter import ChannelFilter
 from cod3s_data.observatory.message_store import JourneyStep, JourneyStore, MessageDetailStore
 from cod3s_data.observatory.sampler import MessageSampler
 from cod3s_data.observatory.websocket_manager import WebSocketManager
@@ -55,12 +56,14 @@ class ObservatoryBridge:
         websocket_manager: WebSocketManager,
         message_store: MessageDetailStore | None = None,
         journey_store: JourneyStore | None = None,
+        channel_filter: ChannelFilter | None = None,
     ) -> None:
         self._buffer = event_buffer
         self._sampler = sampler
         self._ws = websocket_manager
         self._message_store = message_store
         self._journey_store = journey_store
+        self._channels = channel_filter or ChannelFilter()
         self._server: Any = None
         self._framework: Any = None
         # Mapping message_id -> trace_id for correlating messages across transformations
@@ -293,6 +296,10 @@ class ObservatoryBridge:
     ) -> None:
         """Called by the broker after a message is published."""
         try:
+            # Before the sampler: a channel nobody watches costs nothing, not
+            # even a counter tick that would skew the sampling of the others.
+            if not self._channels.observes(channel):
+                return
             if not self._sampler.should_process(channel):
                 return
 
