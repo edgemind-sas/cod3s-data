@@ -886,6 +886,7 @@ before validation. An unset variable changes nothing.
 | `COD3S_OBSERVATORY_ENABLED` | `observatory.enabled` | bool |
 | `COD3S_OBSERVATORY_HOST` | `observatory.host` | str |
 | `COD3S_OBSERVATORY_PORT` | `observatory.port` | int |
+| `COD3S_OBSERVATORY_HISTORY_SIZE` | `observatory.history_size` | int |
 | `COD3S_OBSERVATORY_BUFFER_SIZE` | `observatory.buffer_size` | int |
 | `COD3S_OBSERVATORY_MEMORY_LIMIT_MB` | `observatory.memory_limit_mb` | int |
 | `COD3S_OBSERVATORY_DEBUG` | `observatory.debug.enabled` | bool |

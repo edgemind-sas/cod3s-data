@@ -51,8 +51,16 @@ class MessageDetailStore:
         message_dict: dict[str, Any],
         subscriber_count: int,
         trace_id: str,
+        observed_at: str = "",
     ) -> None:
-        """Store a message's complete details."""
+        """Store a message's complete details.
+
+        `observed_at` is when the pipeline published the message, as opposed to
+        `message_dict["timestamp"]`, which is when the source says the reading
+        was taken. The Observatory is a debugging view of the pipeline, so it
+        shows the former; the latter is what InfluxDB and Grafana index on, and
+        the two diverge by design whenever a recorded session is replayed.
+        """
         # Move to end if already exists (LRU update)
         if message_id in self._store:
             self._store.move_to_end(message_id)
@@ -66,7 +74,10 @@ class MessageDetailStore:
             "channel": channel,
             "trace_id": trace_id,
             "subscriber_count": subscriber_count,
+            # After the spread: `message_dict` carries the source's own
+            # `timestamp`, which must stay available and must not be overwritten.
             **message_dict,
+            "observed_at": observed_at,
         }
 
     def get(self, message_id: str) -> dict[str, Any] | None:

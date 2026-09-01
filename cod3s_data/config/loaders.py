@@ -97,6 +97,7 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ("COD3S_OBSERVATORY_ENABLED", "enabled", "bool"),
         ("COD3S_OBSERVATORY_HOST", "host", "str"),
         ("COD3S_OBSERVATORY_PORT", "port", "int"),
+        ("COD3S_OBSERVATORY_HISTORY_SIZE", "history_size", "int"),
         ("COD3S_OBSERVATORY_BUFFER_SIZE", "buffer_size", "int"),
         ("COD3S_OBSERVATORY_MEMORY_LIMIT_MB", "memory_limit_mb", "int"),
     ]

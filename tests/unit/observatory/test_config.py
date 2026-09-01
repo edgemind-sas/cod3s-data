@@ -73,7 +73,13 @@ class TestObservatoryConfig:
         assert config.enabled is True
         assert config.host == "127.0.0.1"
         assert config.port == 8765
-        assert config.buffer_size == 1000
+        assert config.history_size == 500
+        # One knob drives the three stores; the explicit caps stay unset so a
+        # listed row is always a row whose details and journey still exist.
+        assert config.buffer_size is None
+        assert config.message_detail_cache_size is None
+        assert config.retained_events == 500
+        assert config.retained_details == 500
         assert config.memory_limit_mb == 50
         assert config.interactive is False
         assert isinstance(config.debug, DebugConfig)
@@ -147,3 +153,33 @@ class TestObservatoryConfig:
         assert config.debug.granularity == "breakpoint"
         assert config.sampling.strategy == "time_based"
         assert config.sampling.interval_ms == 500
+
+
+class TestRetentionKnob:
+    """`history_size` is the one setting; the explicit caps only override it.
+
+    The three stores have to agree: the UI lists what the ring buffer holds, and
+    clicking a row asks the detail and journey stores about it. Set apart — 1000
+    listed against 500 inspectable — half the table answered "no longer
+    available" when clicked.
+    """
+
+    def test_history_size_drives_both_stores(self):
+        config = ObservatoryConfig(history_size=2000)
+        assert config.retained_events == 2000
+        assert config.retained_details == 2000
+
+    def test_explicit_caps_win(self):
+        config = ObservatoryConfig(
+            history_size=500, buffer_size=4000, message_detail_cache_size=800
+        )
+        assert config.retained_events == 4000
+        assert config.retained_details == 800
+
+    def test_stores_are_built_from_the_knob(self):
+        from cod3s_data.observatory import create_observatory
+
+        bridge = create_observatory(ObservatoryConfig(history_size=120))
+        assert bridge._buffer.max_size == 120
+        assert bridge._message_store._max_entries == 120
+        assert bridge._journey_store._max_entries == 120

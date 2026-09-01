@@ -288,7 +288,16 @@ class ObservatoryBridge:
             if self._message_store is not None:
                 try:
                     msg_dict = message.to_dict() if hasattr(message, "to_dict") else {}
-                    self._message_store.store(msg_id, channel, msg_dict, subscriber_count, trace_id)
+                    self._message_store.store(
+                        msg_id,
+                        channel,
+                        msg_dict,
+                        subscriber_count,
+                        trace_id,
+                        # The buffered event's own timestamp, so a row hydrated
+                        # from the snapshot and its detail show the same instant.
+                        observed_at=event.timestamp.isoformat(),
+                    )
                 except Exception:
                     pass
 

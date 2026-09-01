@@ -44,7 +44,7 @@ def create_observatory(
 
     # Create components
     event_buffer = EventBuffer(
-        max_size=config.buffer_size,
+        max_size=config.retained_events,
         memory_limit_bytes=config.memory_limit_mb * 1024 * 1024,
     )
     sampler = MessageSampler(
@@ -54,8 +54,8 @@ def create_observatory(
     )
     ws_manager = WebSocketManager()
     debug_controller = DebugController(enabled=config.debug.enabled)
-    message_store = MessageDetailStore(max_entries=config.message_detail_cache_size)
-    journey_store = JourneyStore(max_entries=config.message_detail_cache_size)
+    message_store = MessageDetailStore(max_entries=config.retained_details)
+    journey_store = JourneyStore(max_entries=config.retained_details)
 
     # Create bridge
     bridge = ObservatoryBridge(

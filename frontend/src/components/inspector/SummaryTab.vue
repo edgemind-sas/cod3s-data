@@ -13,11 +13,22 @@
           </v-chip>
         </td>
       </tr>
+      <!-- Pipeline time first: the Observatory watches the architecture, not the
+           process. The source's own timestamp is what Grafana and InfluxDB index
+           on, and it is kept right below because a gap between the two is itself
+           worth seeing — a replayed session puts months between them. -->
       <tr>
-        <td class="text-medium-emphasis font-weight-medium">Timestamp</td>
+        <td class="text-medium-emphasis font-weight-medium">Published</td>
+        <td>
+          {{ formatTimestamp(observedAt) }}
+          <span class="text-caption text-medium-emphasis ml-2">{{ timeAgo(observedAt) }}</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="text-medium-emphasis font-weight-medium">Source timestamp</td>
         <td>
           {{ formatTimestamp(detail.timestamp) }}
-          <span class="text-caption text-medium-emphasis ml-2">{{ timeAgo(detail.timestamp) }}</span>
+          <span v-if="clockGap" class="text-caption text-warning ml-2">{{ clockGap }}</span>
         </td>
       </tr>
       <tr>
@@ -60,6 +71,29 @@ import type { MessageDetail } from '@/types'
 import { channelColor } from '@/utils/channelColors'
 
 const props = defineProps<{ detail: MessageDetail }>()
+
+/** Falls back to the source's timestamp for a detail stored before this field. */
+const observedAt = computed(() => props.detail.observed_at || props.detail.timestamp)
+
+/** Shown only when the two clocks disagree by more than a rounding error. */
+const clockGap = computed(() => {
+  const observed = new Date(observedAt.value).getTime()
+  const source = new Date(props.detail.timestamp).getTime()
+  if (!Number.isFinite(observed) || !Number.isFinite(source)) return ''
+  const ms = observed - source
+  if (Math.abs(ms) < 1000) return ''
+  const behind = ms > 0
+  const secs = Math.abs(ms) / 1000
+  const amount =
+    secs < 60
+      ? `${secs.toFixed(1)}s`
+      : secs < 3600
+        ? `${Math.round(secs / 60)}m`
+        : secs < 86400
+          ? `${Math.round(secs / 3600)}h`
+          : `${Math.round(secs / 86400)}d`
+  return behind ? `${amount} older than publication` : `${amount} ahead of publication`
+})
 
 const valueType = computed(() => {
   const v = props.detail.value

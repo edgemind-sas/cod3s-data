@@ -13,7 +13,11 @@ export interface StoredMessage {
 
 export const useMessagesStore = defineStore('messages', () => {
   const messages = ref<StoredMessage[]>([])
-  const maxMessages = 1000
+  // Set from the server's `connected` payload. Keeping more rows than the
+  // server can describe made half the table clickable and dead: the details and
+  // the journey of an older message were long evicted. The default matches the
+  // server's own so the window before the handshake behaves the same.
+  const maxMessages = ref(500)
 
   // Arrivals are coalesced into one reactive mutation per animation frame.
   // Sampling defaults to "none", so a fast pipeline delivers one WebSocket
@@ -38,7 +42,7 @@ export const useMessagesStore = defineStore('messages', () => {
     pending = []
     messages.value.push(...batch)
 
-    const excess = messages.value.length - maxMessages
+    const excess = messages.value.length - maxMessages.value
     // splice rather than slice: it keeps the array identity, so consumers
     // holding the reference are not invalidated wholesale on every eviction.
     if (excess > 0) messages.value.splice(0, excess)
@@ -56,7 +60,7 @@ export const useMessagesStore = defineStore('messages', () => {
     pending.push(msg)
     // A burst larger than the cap can only end up evicted; drop the excess
     // here rather than pushing it through the reactive array first.
-    if (pending.length > maxMessages) pending = pending.slice(-maxMessages)
+    if (pending.length > maxMessages.value) pending = pending.slice(-maxMessages.value)
     scheduleFlush()
   }
 
@@ -69,5 +73,13 @@ export const useMessagesStore = defineStore('messages', () => {
     messages.value = []
   }
 
-  return { messages, messageCount, channels, addMessage, getByChannel, clear }
+  /** Align the client's retention with what the server can still describe. */
+  function setMaxMessages(limit: number) {
+    if (!Number.isFinite(limit) || limit < 1) return
+    maxMessages.value = Math.floor(limit)
+    const excess = messages.value.length - maxMessages.value
+    if (excess > 0) messages.value.splice(0, excess)
+  }
+
+  return { messages, messageCount, channels, maxMessages, addMessage, setMaxMessages, getByChannel, clear }
 })

@@ -811,3 +811,29 @@ class TestReceiveChannelPerMessage:
         # can rebuild the tree from parentage rather than from channels.
         assert [s["message_id"] for s in received] == [str(m.id) for m in unpacked]
         assert {s["parent_message_id"] for s in received} == {str(root.id)}
+
+
+class TestObservedAt:
+    """The detail carries the pipeline's clock alongside the source's.
+
+    The table and the Timeline plot when the Observatory saw a message; the
+    Summary tab used to show the source's timestamp instead. On a live pipeline
+    the two agree and nothing showed; replaying a recorded session with its
+    original timestamps put months between the row and the panel it opened.
+    """
+
+    async def test_detail_carries_both_clocks(self):
+        store = MessageDetailStore()
+        bridge = _make_bridge(message_store=store, journey_store=JourneyStore())
+        recorded = datetime(2026, 2, 26, 13, 54, 30, tzinfo=UTC)
+        message = _make_message(timestamp=recorded)
+
+        await bridge.on_message_published("sensors.temperature", message, 1)
+
+        detail = bridge.get_message_detail(str(message.id))
+        assert detail is not None
+        # The source's own time is untouched — Grafana indexes on it.
+        assert detail["timestamp"].startswith("2026-02-26T13:54:30")
+        # And the publication is stamped with the Observatory's clock, not it.
+        assert detail["observed_at"]
+        assert not detail["observed_at"].startswith("2026-02-26T13:54:30")

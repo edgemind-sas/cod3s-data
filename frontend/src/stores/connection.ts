@@ -101,6 +101,10 @@ export const useConnectionStore = defineStore('connection', () => {
     switch (msg.type) {
       case 'connected':
         serverVersion.value = (msg.payload.server_version as string) || ''
+        // Before hydrating: the cap decides what the snapshot is trimmed to.
+        if (typeof msg.payload.history_size === 'number') {
+          messagesStore.setMaxMessages(msg.payload.history_size)
+        }
         // The snapshot's history was being sent and dropped: a page reload, or
         // opening the Observatory on a pipeline already running, started from an
         // empty Timeline and an empty Messages table while the server had just
