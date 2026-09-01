@@ -29,7 +29,7 @@
           variant="text"
           :color="autoScroll ? 'primary' : undefined"
           @click="autoScroll = !autoScroll"
-          :title="autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'"
+          :title="autoScroll ? 'Freeze the window' : 'Follow the newest messages'"
         />
       </div>
 
@@ -44,14 +44,24 @@
               :key="ch"
               class="timeline-lane-label"
             >
-              <v-chip size="small" variant="flat" :color="channelColor(ch)" class="text-truncate" style="max-width: 148px">
-                {{ ch }}
+              <v-chip
+                size="small"
+                variant="flat"
+                :color="channelColor(ch)"
+                :title="ch"
+                class="lane-chip"
+              >
+                <!-- Truncated from the LEFT: six channels share the prefix
+                     `sensors.egm.temperature_`, so cutting the tail left five
+                     lanes labelled identically. The end is what tells them
+                     apart; the full name is in the tooltip. -->
+                <bdi>{{ ch }}</bdi>
               </v-chip>
             </div>
           </div>
 
-          <!-- Horizontally scrollable plot -->
-          <div ref="scrollWrap" class="timeline-scroll" @scroll="onScroll">
+          <!-- Plot: exactly as wide as the window it shows -->
+          <div class="timeline-scroll">
             <svg
               :width="svgWidth"
               :height="svgHeight"
@@ -84,7 +94,7 @@
               <!-- Message dots -->
               <circle
                 v-for="dot in visibleDots"
-                :key="dot.messageId"
+                :key="dot.uid"
                 :cx="dot.x"
                 :cy="dot.y"
                 :r="dot.r"
@@ -117,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useMessagesStore, type StoredMessage } from '@/stores/messages'
 // The same function and the same palette were declared here as well. They agreed
 // by luck; sharing one keeps a channel the same colour in both views for good.
@@ -125,7 +135,7 @@ import { channelColor } from '@/utils/channelColors'
 
 const AXIS_HEIGHT = 30
 const LANE_HEIGHT = 40
-const LANE_LABELS_WIDTH = 160
+const LANE_LABELS_WIDTH = 200
 
 const messagesStore = useMessagesStore()
 
@@ -136,30 +146,34 @@ const zoomLevels = [
 ]
 const zoomIndex = ref(1)
 const autoScroll = ref(true)
-const scrollWrap = ref<HTMLElement | null>(null)
 const containerEl = ref<HTMLElement | null>(null)
 const containerWidth = ref(800)
 
 let resizeObserver: ResizeObserver | null = null
 
-onMounted(() => {
-  if (containerEl.value) {
-    containerWidth.value = containerEl.value.clientWidth - LANE_LABELS_WIDTH
-    resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        containerWidth.value = entry.contentRect.width - LANE_LABELS_WIDTH
-      }
-    })
-    resizeObserver.observe(containerEl.value)
-  }
-})
+// The plot lives behind `v-else`, so on a cold page — no messages yet — there
+// is no element to measure at mount: the observer was never attached and the
+// width stayed at its 800px placeholder for the rest of the session, whatever
+// the window size. Watching the ref attaches it the moment the element appears.
+watch(containerEl, (el) => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (!el) return
+  containerWidth.value = el.clientWidth - LANE_LABELS_WIDTH
+  resizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      containerWidth.value = entry.contentRect.width - LANE_LABELS_WIDTH
+    }
+  })
+  resizeObserver.observe(el)
+}, { immediate: true, flush: 'post' })
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
 })
 
 interface DotData {
-  messageId: string
+  uid: number
   x: number
   y: number
   r: number
@@ -176,10 +190,12 @@ const hoveredTime = computed(() => {
   return `${d.toLocaleTimeString()}.${String(d.getMilliseconds()).padStart(3, '0')}`
 })
 
+const TOOLTIP_WIDTH_ESTIMATE = 200
 const tooltipLeft = computed(() => {
-  if (!hoveredDot.value || !scrollWrap.value) return 0
-  const xInView = hoveredDot.value.x - scrollLeft.value
-  return Math.min(Math.max(xInView + LANE_LABELS_WIDTH + 16, LANE_LABELS_WIDTH), (containerWidth.value + LANE_LABELS_WIDTH) - 200)
+  if (!hoveredDot.value) return 0
+  const x = hoveredDot.value.x + LANE_LABELS_WIDTH + 16
+  const rightEdge = containerWidth.value + LANE_LABELS_WIDTH - TOOLTIP_WIDTH_ESTIMATE
+  return Math.min(Math.max(x, LANE_LABELS_WIDTH), rightEdge)
 })
 const TOOLTIP_HEIGHT_ESTIMATE = 110
 const tooltipTop = computed(() => {
@@ -197,36 +213,40 @@ const currentWindow = computed(() => zoomLevels[zoomIndex.value])
 
 const availableWidth = computed(() => Math.max(containerWidth.value, 400))
 
-const pxPerSecond = computed(() => {
-  const dur = totalDurationSec.value
-  if (dur <= 0) return 12
-  const natural = availableWidth.value / dur
-  return Math.max(natural, 4)
-})
+/**
+ * A window of fixed width, anchored on the newest message.
+ *
+ * The origin used to follow the *oldest* retained message, snapped to a ten
+ * second grid. Once the store is full and evicting, that origin advances one
+ * grid step at a time — and every dot on the plot jumps a tenth of the window
+ * to the left at once. That is the timeline "going back to zero".
+ *
+ * Anchoring on the newest message instead makes the window slide: a dot enters
+ * at the right edge and drifts left as time passes, at the same speed as time.
+ * Nothing jumps, because nothing depends on which message happens to be oldest.
+ *
+ * The horizontal scroll is gone with it, and loses nothing: `pxPerSecond` was
+ * `availableWidth / duration`, so the plot was always exactly as wide as its
+ * viewport and there was never anything to scroll to. The zoom buttons now
+ * choose the window outright, which is what they looked like they did.
+ */
+const windowSec = computed(() => currentWindow.value.windowSec)
 
-// A dot's x is measured from `start` and scaled by `pxPerSecond`. Both used to
-// follow the retained messages, so adding one moved all thousand: the origin
-// tracked the oldest message, and the scale tracked the span. Snapping them to a
-// ten-second grid — the origin down, the extent up — holds them still between
-// jumps, and the DOM then only sees the dots that genuinely came and went.
-const GRID_SEC = 10
-const GRID_MS = GRID_SEC * 1000
+const pxPerSecond = computed(() => availableWidth.value / windowSec.value)
+
+// Freezing the window is what the pause button now does: the view stops
+// following the flow so a dot can be read, while messages keep arriving.
+const frozenEnd = ref<number | null>(null)
 
 const timeRange = computed(() => {
   const msgs = messagesStore.messages
   if (msgs.length === 0) return { start: 0, end: 0 }
-  const first = Date.parse(msgs[0].timestamp) - 2000
-  const end = Date.parse(msgs[msgs.length - 1].timestamp) + 2000
-  return { start: Math.floor(first / GRID_MS) * GRID_MS, end }
+  const latest = Date.parse(msgs[msgs.length - 1].timestamp)
+  const end = frozenEnd.value ?? latest
+  return { start: end - windowSec.value * 1000, end }
 })
 
-const totalDurationSec = computed(() => {
-  const { start, end } = timeRange.value
-  const span = Math.max((end - start) / 1000, currentWindow.value.windowSec)
-  return Math.ceil(span / GRID_SEC) * GRID_SEC
-})
-
-const svgWidth = computed(() => Math.max(totalDurationSec.value * pxPerSecond.value, availableWidth.value))
+const svgWidth = computed(() => availableWidth.value)
 const svgHeight = computed(() => AXIS_HEIGHT + Math.max(messagesStore.channels.length, 1) * LANE_HEIGHT)
 
 const channelIndex = computed(() => {
@@ -237,18 +257,22 @@ const channelIndex = computed(() => {
 
 const timeTicks = computed(() => {
   const { start } = timeRange.value
-  const dur = totalDurationSec.value
-  let interval = 5
-  if (dur > 120) interval = 15
-  if (dur > 300) interval = 30
-  if (dur > 600) interval = 60
+  if (!start) return []
+  const dur = windowSec.value
+  const interval = dur > 300 ? 60 : dur > 120 ? 30 : dur > 60 ? 15 : 5
 
+  // Ticks land on round seconds rather than on the window's edge, so the labels
+  // stay put while the window slides underneath them.
   const ticks: { x: number; label: string }[] = []
-  for (let s = 0; s <= dur; s += interval) {
-    const t = new Date(start + s * 1000)
+  const firstTick = Math.ceil(start / (interval * 1000)) * interval * 1000
+  for (let t = firstTick; t <= start + dur * 1000; t += interval * 1000) {
     ticks.push({
-      x: s * pxPerSecond.value,
-      label: t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      x: ((t - start) / 1000) * pxPerSecond.value,
+      label: new Date(t).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
     })
   }
   return ticks
@@ -261,95 +285,43 @@ function formatTags(tags: Record<string, string> | undefined): string {
 
 // Geometry only. The strings the tooltip needs are derived from the hovered
 // message instead, so a recompute does not format a thousand of them to show one.
-// A dot's geometry only depends on the message, the origin, the scale and the
-// lane order — and the first three are held still by the grid snapping above.
-// Recomputing all of them on every arrival rebuilt hundreds of objects per
-// frame to add one; they are kept and reused until something they depend on
-// actually moves.
-let dotCache = new Map<string, DotData>()
-let dotCacheKey = ''
-
+// Straightforward, and cheap enough: the store is capped, so this is a few
+// hundred objects per frame. An earlier version memoised them by message_id —
+// which is not unique, so two publications of the same message shared one dot
+// and the second was drawn in the first one's lane, in the first one's colour.
 const dots = computed<DotData[]>(() => {
   const { start } = timeRange.value
   const ppSec = pxPerSecond.value
   const lanes = channelIndex.value
-
-  const key = `${start}|${ppSec}|${Array.from(lanes.keys()).join(',')}`
-  if (key !== dotCacheKey) {
-    dotCache = new Map()
-    dotCacheKey = key
-  }
-
-  const previous = dotCache
-  const current = new Map<string, DotData>()
-  const out: DotData[] = []
-  for (const msg of messagesStore.messages) {
-    let dot = previous.get(msg.message_id)
-    if (!dot) {
-      const offsetSec = (Date.parse(msg.timestamp) - start) / 1000
-      const laneIdx = lanes.get(msg.channel) ?? 0
-      dot = {
-        messageId: msg.message_id,
-        x: offsetSec * ppSec,
-        y: AXIS_HEIGHT + laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2,
-        r: Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14),
-        color: channelColor(msg.channel),
-        msg,
-      }
+  return messagesStore.messages.map((msg) => {
+    const offsetSec = (Date.parse(msg.timestamp) - start) / 1000
+    const laneIdx = lanes.get(msg.channel) ?? 0
+    return {
+      uid: msg.uid,
+      x: offsetSec * ppSec,
+      y: AXIS_HEIGHT + laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2,
+      r: Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14),
+      color: channelColor(msg.channel),
+      msg,
     }
-    current.set(msg.message_id, dot)
-    out.push(dot)
-  }
-  // Rebuilt rather than pruned, so evicted messages cannot linger in the cache.
-  dotCache = current
-  return out
+  })
 })
 
-let userScrolled = false
-const scrollLeft = ref(0)
-
-function onScroll() {
-  if (!scrollWrap.value) return
-  const el = scrollWrap.value
-  scrollLeft.value = el.scrollLeft
-  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 20
-  if (!atEnd) userScrolled = true
-  else userScrolled = false
-}
-
-function scrollToEnd() {
-  if (scrollWrap.value) {
-    scrollWrap.value.scrollLeft = scrollWrap.value.scrollWidth
-    scrollLeft.value = scrollWrap.value.scrollLeft
-  }
-}
-
-// Only the dots the viewport can show are handed to the DOM. The plot is as wide
-// as the whole retained history — minutes of it — while the window shows a
-// fraction, and every circle costs two event listeners. The margin keeps a
-// screenful on each side so panning does not reveal blanks.
-const CULL_MARGIN_PX = 400
-
+// Only what falls inside the window reaches the DOM. The store holds more than
+// the window shows — everything older has slid off the left edge — and every
+// circle costs two event listeners.
 const visibleDots = computed<DotData[]>(() => {
-  const from = scrollLeft.value - CULL_MARGIN_PX
-  const to = scrollLeft.value + availableWidth.value + CULL_MARGIN_PX
-  return dots.value.filter(dot => dot.x >= from && dot.x <= to)
+  const width = svgWidth.value
+  return dots.value.filter(dot => dot.x >= -8 && dot.x <= width + 8)
 })
 
-watch(
-  () => messagesStore.messageCount,
-  () => {
-    if (autoScroll.value && !userScrolled) {
-      nextTick(scrollToEnd)
-    }
-  }
-)
-
-watch(autoScroll, (v) => {
-  if (v) {
-    userScrolled = false
-    nextTick(scrollToEnd)
-  }
+// The pause button freezes the window instead of stopping a scroll: there is
+// no scroll any more, the window simply stops following the newest message.
+watch(autoScroll, (following) => {
+  const msgs = messagesStore.messages
+  frozenEnd.value = following || !msgs.length
+    ? null
+    : Date.parse(msgs[msgs.length - 1].timestamp)
 })
 </script>
 
@@ -363,7 +335,7 @@ watch(autoScroll, (v) => {
 
 .timeline-lanes {
   flex-shrink: 0;
-  width: 160px;
+  width: 200px;
   border-right: 1px solid #444;
   background: rgb(var(--v-theme-surface));
   z-index: 2;
@@ -389,12 +361,23 @@ watch(autoScroll, (v) => {
 .timeline-scroll {
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   position: relative;
 }
 
 .timeline-svg {
+  display: block;
+}
+
+.lane-chip {
+  max-width: 188px;
+  direction: rtl;
+  overflow: hidden;
+}
+.lane-chip :deep(.v-chip__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   display: block;
 }
 

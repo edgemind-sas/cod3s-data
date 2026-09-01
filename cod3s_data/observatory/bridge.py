@@ -186,11 +186,27 @@ class ObservatoryBridge:
         """Find which component publishes to a given channel.
 
         Returns (component_id, component_type, label).
+
+        A component may publish below its declared output channel: `unpack`
+        declares `sensors.egm` and publishes on `sensors.egm.temperature_top`,
+        the moving average likewise. Exact matching alone left every one of
+        those publications credited to "broker" in the Inspector, which is the
+        one thing a journey is meant to tell you. The longest declared prefix
+        wins, so a component publishing under another's sub-tree is still
+        attributed to the nearer of the two.
         """
         if self._framework is None:
             return ("broker", "broker", "")
         self._ensure_index()
-        return self._publisher_of_channel.get(channel, ("broker", "broker", ""))
+        exact = self._publisher_of_channel.get(channel)
+        if exact is not None:
+            return exact
+        best: tuple[str, str, str] | None = None
+        best_len = -1
+        for declared, publisher in self._publisher_of_channel.items():
+            if channel.startswith(declared + ".") and len(declared) > best_len:
+                best, best_len = publisher, len(declared)
+        return best if best is not None else ("broker", "broker", "")
 
     def _resolve_label(self, component_id: str) -> str:
         """Get the label for a component by its ID."""

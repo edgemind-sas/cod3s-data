@@ -71,7 +71,7 @@
             <tbody>
               <tr
                 v-for="msg in filteredMessages"
-                :key="msg.message_id"
+                :key="msg.uid"
                 :class="{ 'inspector-selected': msg.message_id === inspector.selectedMessageId }"
                 class="message-row"
                 @click="inspectMessage(msg.message_id)"

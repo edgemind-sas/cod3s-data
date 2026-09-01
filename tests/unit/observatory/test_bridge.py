@@ -870,3 +870,54 @@ class TestSamplingIsCoherent:
         journey = js.get_journey(str(kept.id))
         assert journey is not None
         assert [s["stage"] for s in journey] == ["PUBLISHED", "RECEIVED"]
+
+
+class TestPublisherOfSubChannels:
+    """A component publishing below its declared channel is still named.
+
+    `unpack` declares `sensors.egm` and publishes on `sensors.egm.<key>`; the
+    moving average does the same. Exact matching credited every one of those
+    publications to "broker", which is precisely what the journey exists to say.
+    """
+
+    def test_sub_channel_is_credited_to_its_component(self):
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "raw.egm", label="EGM")],
+            transformations=[
+                _FakeTransformation("tfm-unpack", ["raw.egm"], "sensors.egm", label="Unpack"),
+                _FakeTransformation(
+                    "tfm-avg", ["sensors.egm.*"], "sensors.smoothed", label="Average"
+                ),
+            ],
+        )
+
+        assert bridge._resolve_publisher("sensors.egm") == (
+            "tfm-unpack",
+            "transformation",
+            "Unpack",
+        )
+        assert bridge._resolve_publisher("sensors.egm.temperature_top") == (
+            "tfm-unpack",
+            "transformation",
+            "Unpack",
+        )
+        assert bridge._resolve_publisher("sensors.smoothed.temperature_top_smoothed") == (
+            "tfm-avg",
+            "transformation",
+            "Average",
+        )
+        # Nothing declares this one, so it stays the broker's.
+        assert bridge._resolve_publisher("unrelated.channel") == ("broker", "broker", "")
+
+    def test_the_nearest_declaration_wins(self):
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            transformations=[
+                _FakeTransformation("wide", ["in"], "sensors", label="Wide"),
+                _FakeTransformation("narrow", ["in"], "sensors.egm", label="Narrow"),
+            ],
+        )
+
+        assert bridge._resolve_publisher("sensors.egm.pressure")[0] == "narrow"
+        assert bridge._resolve_publisher("sensors.other.pressure")[0] == "wide"

@@ -2,6 +2,16 @@ import { defineStore } from 'pinia'
 import { ref, computed, triggerRef } from 'vue'
 
 export interface StoredMessage {
+  /**
+   * Identifies this publication, where `message_id` does not.
+   *
+   * A message_id is not unique across the stream: a pass-through transform —
+   * `throttle`, `filter` — forwards the very object it received, so the same id
+   * is published again on the next channel. Keying a `v-for` on message_id
+   * therefore produced duplicate keys, and Vue then stopped removing evicted
+   * rows: the timeline reached 28 000 `<circle>` nodes for a 500-message store.
+   */
+  uid: number
   message_id: string
   channel: string
   key: string | null
@@ -10,6 +20,9 @@ export interface StoredMessage {
   subscriber_count: number
   timestamp: string
 }
+
+/** Incoming payloads carry everything but the uid, which the store assigns. */
+export type IncomingMessage = Omit<StoredMessage, 'uid'>
 
 export const useMessagesStore = defineStore('messages', () => {
   const messages = ref<StoredMessage[]>([])
@@ -25,6 +38,7 @@ export const useMessagesStore = defineStore('messages', () => {
   // consumer at the pipeline's rate instead of the display's.
   let pending: StoredMessage[] = []
   let frame: number | null = null
+  let nextUid = 1
 
   const messageCount = computed(() => messages.value.length)
 
@@ -76,9 +90,9 @@ export const useMessagesStore = defineStore('messages', () => {
       : (setTimeout(flush, 16) as unknown as number)
   }
 
-  function addMessage(msg: StoredMessage) {
+  function addMessage(msg: IncomingMessage) {
     if (msg.channel.startsWith('_metrics.')) return
-    pending.push(msg)
+    pending.push({ ...msg, uid: nextUid++ })
     // A burst larger than the cap can only end up evicted; drop the excess
     // here rather than pushing it through the reactive array first.
     if (pending.length > maxMessages.value) pending = pending.slice(-maxMessages.value)
