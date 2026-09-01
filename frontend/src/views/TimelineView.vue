@@ -83,7 +83,7 @@
 
               <!-- Message dots -->
               <circle
-                v-for="dot in dots"
+                v-for="dot in visibleDots"
                 :key="dot.messageId"
                 :cx="dot.x"
                 :cy="dot.y"
@@ -119,14 +119,9 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useMessagesStore, type StoredMessage } from '@/stores/messages'
-
-const PALETTE = ['#42A5F5', '#66BB6A', '#FFA726', '#EF5350', '#AB47BC', '#26C6DA', '#EC407A', '#8D6E63']
-
-function channelColor(channel: string): string {
-  let hash = 0
-  for (let i = 0; i < channel.length; i++) hash = (hash * 31 + channel.charCodeAt(i)) | 0
-  return PALETTE[Math.abs(hash) % PALETTE.length]
-}
+// The same function and the same palette were declared here as well. They agreed
+// by luck; sharing one keeps a channel the same colour in both views for good.
+import { channelColor } from '@/utils/channelColors'
 
 const AXIS_HEIGHT = 30
 const LANE_HEIGHT = 40
@@ -183,8 +178,7 @@ const hoveredTime = computed(() => {
 
 const tooltipLeft = computed(() => {
   if (!hoveredDot.value || !scrollWrap.value) return 0
-  const scrollLeft = scrollWrap.value.scrollLeft
-  const xInView = hoveredDot.value.x - scrollLeft
+  const xInView = hoveredDot.value.x - scrollLeft.value
   return Math.min(Math.max(xInView + LANE_LABELS_WIDTH + 16, LANE_LABELS_WIDTH), (containerWidth.value + LANE_LABELS_WIDTH) - 200)
 })
 const TOOLTIP_HEIGHT_ESTIMATE = 110
@@ -285,10 +279,12 @@ const dots = computed<DotData[]>(() => {
 })
 
 let userScrolled = false
+const scrollLeft = ref(0)
 
 function onScroll() {
   if (!scrollWrap.value) return
   const el = scrollWrap.value
+  scrollLeft.value = el.scrollLeft
   const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 20
   if (!atEnd) userScrolled = true
   else userScrolled = false
@@ -297,8 +293,21 @@ function onScroll() {
 function scrollToEnd() {
   if (scrollWrap.value) {
     scrollWrap.value.scrollLeft = scrollWrap.value.scrollWidth
+    scrollLeft.value = scrollWrap.value.scrollLeft
   }
 }
+
+// Only the dots the viewport can show are handed to the DOM. The plot is as wide
+// as the whole retained history — minutes of it — while the window shows a
+// fraction, and every circle costs two event listeners. The margin keeps a
+// screenful on each side so panning does not reveal blanks.
+const CULL_MARGIN_PX = 400
+
+const visibleDots = computed<DotData[]>(() => {
+  const from = scrollLeft.value - CULL_MARGIN_PX
+  const to = scrollLeft.value + availableWidth.value + CULL_MARGIN_PX
+  return dots.value.filter(dot => dot.x >= from && dot.x <= to)
+})
 
 watch(
   () => messagesStore.messageCount,

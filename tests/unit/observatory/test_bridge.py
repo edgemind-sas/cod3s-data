@@ -753,3 +753,61 @@ class TestParamEventsDoNotCorruptTopology:
 
         detail = await get_component("tfm-0", request)
         assert detail == {"id": "tfm-0", "type": "transformation", "state": "running"}
+
+
+class TestReceiveChannelPerMessage:
+    """A component receiving several channels of one trace must not conflate them.
+
+    `_find_receive_channel` used to match the component's subscription patterns
+    against the trace's published channels and return the first hit, ignoring
+    which message was actually received. An `unpack` that fans one reading out
+    into six sensor channels therefore reported all six receptions on the first
+    channel — and the Inspector drew the five others as childless publications.
+    """
+
+    async def test_six_channels_are_not_conflated(self):
+        js = JourneyStore()
+        bridge = _make_bridge(journey_store=js)
+        keys = [
+            "temperature_top",
+            "temperature_bottom",
+            "temperature_nozzle_1",
+            "temperature_nozzle_2",
+            "vitesse_extrudeur",
+            "pressure",
+        ]
+        channels = [f"sensors.egm.{key}" for key in keys]
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "raw.egm")],
+            transformations=[
+                _FakeTransformation("tfm-unpack", ["raw.egm"], "sensors.egm"),
+                _FakeTransformation("tfm-avg", channels, "sensors.smoothed"),
+            ],
+        )
+
+        # The source message fans out into one message per sensor, all sharing
+        # the trace of the reading they came from.
+        root = _make_message(key="egm_reading")
+        await bridge.on_message_published("raw.egm", root, 1)
+        await bridge.on_message_received("tfm-unpack", "transformation", root)
+        unpacked = [_make_message(key=key) for key in keys]
+        await bridge.on_message_processed(
+            "tfm-unpack", "transformation", root, unpacked, "sensors.egm"
+        )
+        for channel, message in zip(channels, unpacked, strict=True):
+            await bridge.on_message_published(channel, message, 1)
+        for message in unpacked:
+            await bridge.on_message_received("tfm-avg", "transformation", message)
+
+        journey = js.get_journey(str(root.id))
+        assert journey is not None
+        received = [
+            s for s in journey if s["stage"] == "RECEIVED" and s["component_id"] == "tfm-avg"
+        ]
+        assert len(received) == 6
+        # Each reception reports the channel its own message was published on.
+        assert [s["channel"] for s in received] == channels
+        # And every step still names the message it is about, so the Inspector
+        # can rebuild the tree from parentage rather than from channels.
+        assert [s["message_id"] for s in received] == [str(m.id) for m in unpacked]
+        assert {s["parent_message_id"] for s in received} == {str(root.id)}

@@ -105,11 +105,21 @@ class JourneyStore:
             self._store[trace_id] = [step]
 
     def get_journey(self, trace_id: str) -> list[dict[str, Any]] | None:
-        """Retrieve journey steps for a trace_id."""
+        """Retrieve journey steps for a trace_id, as dictionaries."""
         if trace_id not in self._store:
             return None
         self._store.move_to_end(trace_id)
         return [step.to_dict() for step in self._store[trace_id]]
+
+    def get_steps(self, trace_id: str) -> list[JourneyStep]:
+        """The trace's steps as dataclasses, without copying them.
+
+        `get_journey` runs `asdict()` over every step, which recurses and copies;
+        on the hot path — once per message received by every component — that
+        rebuilt the whole accumulated trace just to read one field. This returns
+        the live list instead. Read it, never mutate it: it is the store's own.
+        """
+        return self._store.get(trace_id, [])
 
     @property
     def size(self) -> int:

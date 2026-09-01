@@ -139,7 +139,11 @@ class TestCommandDispatch:
         (reply,) = _roundtrip(client, {"type": "message.inspect", "payload": {"message_id": "zz"}})
 
         assert reply["type"] == "error"
-        assert reply["payload"]["message"] == "Message zz not found"
+        assert "zz" in reply["payload"]["message"]
+        # The id comes back with the error so the client can tell which row
+        # failed: without it the Inspector had nothing to match the reply to and
+        # stayed on its loading bar for good.
+        assert reply["payload"]["message_id"] == "zz"
 
     async def test_message_inspect_returns_detail_and_journey(
         self, client: TestClient, bridge: ObservatoryBridge

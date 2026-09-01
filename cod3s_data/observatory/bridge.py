@@ -67,6 +67,12 @@ class ObservatoryBridge:
         self._trace_ids: OrderedDict[str, str] = OrderedDict()
         # Mapping message_id -> parent_message_id for tree structure
         self._parent_ids: OrderedDict[str, str] = OrderedDict()
+        # Component lookups, built once per framework rather than scanned per
+        # message: `_resolve_label` and `_resolve_publisher` sit on the publish
+        # and receive hooks, and both used to walk every component every time.
+        self._by_component_id: dict[str, Any] = {}
+        self._publisher_of_channel: dict[str, tuple[str, str, str]] = {}
+        self._indexed_framework: Any = None
 
     # --- Lifecycle ---
 
@@ -125,6 +131,40 @@ class ObservatoryBridge:
 
     # --- Component resolution ---
 
+    def _ensure_index(self) -> None:
+        """Build the component lookups, once per framework.
+
+        `_framework` is assigned as a plain attribute (framework.py and the
+        tests both do it), so there is no setter to hook: the index is rebuilt
+        whenever the attribute points at a different object.
+        """
+        framework = self._framework
+        if framework is self._indexed_framework:
+            return
+        by_id: dict[str, Any] = {}
+        publishers: dict[str, tuple[str, str, str]] = {}
+        if framework is not None:
+            for source in framework.sources:
+                by_id[getattr(source, "_component_id", "")] = source
+                publishers[source.channel] = (
+                    source._component_id,
+                    "source",
+                    source._label,
+                )
+            for tfm in framework.transformations:
+                by_id[getattr(tfm, "_component_id", "")] = tfm
+                # A source already publishing this channel wins, as in the
+                # sequential scan this replaces.
+                publishers.setdefault(
+                    tfm.output_channel,
+                    (tfm._component_id, "transformation", tfm._label),
+                )
+            for dest in framework.destinations:
+                by_id[getattr(dest, "_component_id", "")] = dest
+        self._by_component_id = by_id
+        self._publisher_of_channel = publishers
+        self._indexed_framework = framework
+
     def _resolve_publisher(self, channel: str) -> tuple[str, str, str]:
         """Find which component publishes to a given channel.
 
@@ -132,56 +172,80 @@ class ObservatoryBridge:
         """
         if self._framework is None:
             return ("broker", "broker", "")
-        for source in self._framework.sources:
-            if source.channel == channel:
-                return (source._component_id, "source", source._label)
-        for tfm in self._framework.transformations:
-            if tfm.output_channel == channel:
-                return (tfm._component_id, "transformation", tfm._label)
-        return ("broker", "broker", "")
+        self._ensure_index()
+        return self._publisher_of_channel.get(channel, ("broker", "broker", ""))
 
     def _resolve_label(self, component_id: str) -> str:
         """Get the label for a component by its ID."""
         if self._framework is None:
             return ""
-        for comp in (
-            list(self._framework.sources)
-            + list(self._framework.transformations)
-            + list(self._framework.destinations)
-        ):
-            if getattr(comp, "_component_id", None) == component_id:
-                return getattr(comp, "_label", "")
-        return ""
+        self._ensure_index()
+        component = self._by_component_id.get(component_id)
+        if component is None:
+            return ""
+        return str(getattr(component, "_label", "") or "")
 
     def _get_component_sub_patterns(self, component_id: str) -> list[str]:
         """Get subscription patterns for a component."""
         if self._framework is None:
             return []
-        for tfm in self._framework.transformations:
-            if tfm._component_id == component_id:
-                return list(tfm.input_channels)
-        for dest in self._framework.destinations:
-            if dest._component_id == component_id:
-                return [dest.channel_pattern]
+        self._ensure_index()
+        component = self._by_component_id.get(component_id)
+        if component is None:
+            return []
+        if hasattr(component, "input_channels"):
+            return list(component.input_channels)
+        if hasattr(component, "channel_pattern"):
+            return [component.channel_pattern]
         return []
 
-    def _find_receive_channel(self, component_id: str, trace_id: str) -> str:
+    def _find_receive_channel(self, component_id: str, trace_id: str, message_id: str) -> str:
         """Determine which published channel this component received from.
 
-        Uses topology (subscription patterns) to match against published
-        channels in this journey.
+        Two facts identify it, and both are needed. The message carries the
+        `message_id` of the PUBLISHED step that put it on the broker, and the
+        channel it arrived on necessarily matches one of the component's
+        subscription patterns. Scanning backwards takes the most recent
+        publication satisfying both, which is the one just delivered.
+
+        Matching on the pattern alone — what this did before — was wrong as soon
+        as a trace published several channels a component subscribes to: it
+        returned the first in journey order, so five of the six `sensors.egm.*`
+        receptions of a six-sensor unpack were attributed to the first channel.
+        Matching on the id alone is not enough either: a component may republish
+        under the same id, and then only the pattern says which publication was
+        this component's input.
+
+        Falls back to the pattern alone when no PUBLISHED step carries the id —
+        sampling drops publications but not receptions, and a long-running trace
+        can be evicted while its messages are still in flight.
         """
+        if self._journey_store is None:
+            return ""
+        steps = self._journey_store.get_steps(trace_id)
+        if not steps:
+            return ""
         patterns = self._get_component_sub_patterns(component_id)
-        if not patterns or self._journey_store is None:
+
+        def subscribed(channel: str) -> bool:
+            return not patterns or any(
+                SubscriptionRegistry.matches(pattern, channel) for pattern in patterns
+            )
+
+        if message_id:
+            for step in reversed(steps):
+                if (
+                    step.stage == "PUBLISHED"
+                    and step.message_id == message_id
+                    and subscribed(step.channel)
+                ):
+                    return step.channel
+
+        if not patterns:
             return ""
-        journey = self._journey_store.get_journey(trace_id)
-        if not journey:
-            return ""
-        published_channels: list[str] = [s["channel"] for s in journey if s["stage"] == "PUBLISHED"]
-        for channel in published_channels:
-            for pattern in patterns:
-                if SubscriptionRegistry.matches(pattern, channel):
-                    return channel
+        for step in reversed(steps):
+            if step.stage == "PUBLISHED" and subscribed(step.channel):
+                return step.channel
         return ""
 
     # --- Observation Hooks (Framework -> Bridge) ---
@@ -265,7 +329,7 @@ class ObservatoryBridge:
             trace_id = self._trace_ids.get(msg_id, msg_id)
             stage = "DELIVERED" if component_type == "destination" else "RECEIVED"
             label = self._resolve_label(component_id)
-            channel = self._find_receive_channel(component_id, trace_id)
+            channel = self._find_receive_channel(component_id, trace_id, msg_id)
             self._journey_store.add_step(
                 trace_id,
                 JourneyStep(
@@ -327,16 +391,7 @@ class ObservatoryBridge:
     ) -> None:
         """Called when a pipeline component changes state."""
         try:
-            label = ""
-            if self._framework is not None:
-                for comp in (
-                    list(self._framework.sources)
-                    + list(self._framework.transformations)
-                    + list(self._framework.destinations)
-                ):
-                    if getattr(comp, "_component_id", None) == component_id:
-                        label = getattr(comp, "_label", "")
-                        break
+            label = self._resolve_label(component_id)
             event = ObservatoryEvent(
                 type=EventType.COMPONENT_STATE,
                 data={

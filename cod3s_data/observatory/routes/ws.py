@@ -274,7 +274,17 @@ async def _handle_command(
                 "type": "error",
                 "id": "evt-err",
                 "timestamp": now,
-                "payload": {"message": f"Message {message_id} not found"},
+                # The id travels with the error: the client shows the failure on
+                # the row it was asked about, and ignores it if the selection
+                # has moved on. Without it an inspect that missed left the panel
+                # spinning, because nothing could tell it the answer was in.
+                "payload": {
+                    "message": (
+                        f"Message {message_id} is no longer available — its details have "
+                        "been evicted from the cache."
+                    ),
+                    "message_id": message_id,
+                },
             }
         return {
             "type": "message.detail",

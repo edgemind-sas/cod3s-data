@@ -24,8 +24,8 @@
       </div>
     </div>
 
-    <!-- PUBLISHED with 2+ children: parallel lanes -->
-    <div v-if="isParallelFanOut" class="fan-out">
+    <!-- 2+ children: parallel lanes -->
+    <div v-if="isFanOut" class="fan-out">
       <div class="fan-out-header">
         <v-icon size="14" class="mr-1">mdi-call-split</v-icon>
         <span class="text-caption text-medium-emphasis">
@@ -57,9 +57,11 @@ const props = defineProps<{
   rootTimestamp: string
 }>()
 
-const isParallelFanOut = computed(() =>
-  props.node.step.stage === 'PUBLISHED' && props.node.children.length > 1
-)
+// Any node can branch, not just a publication: a transformation that emits two
+// messages has two children under its PROCESSED step. Requiring PUBLISHED here
+// meant those children were rendered by neither arm of the template — the whole
+// subtree vanished from the panel without a trace.
+const isFanOut = computed(() => props.node.children.length > 1)
 
 const stageColor = computed(() => {
   switch (props.node.step.stage) {
