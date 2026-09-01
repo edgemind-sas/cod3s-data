@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, triggerRef } from 'vue'
 
 export interface StoredMessage {
   message_id: string
@@ -28,11 +28,26 @@ export const useMessagesStore = defineStore('messages', () => {
 
   const messageCount = computed(() => messages.value.length)
 
-  const channels = computed(() => {
-    const set = new Set<string>()
-    messages.value.forEach(m => set.add(m.channel))
-    return Array.from(set).sort()
-  })
+  // Counted per channel, and maintained as messages arrive and are evicted.
+  // Deriving the list by walking every retained message meant a full pass on
+  // each flush — for a set that changes perhaps a dozen times in a run. The
+  // counts are what make eviction cheap: a channel leaves the list only once
+  // its last message is gone.
+  const channelCounts = ref(new Map<string, number>())
+
+  const channels = computed(() => Array.from(channelCounts.value.keys()).sort())
+
+  function retain(channel: string) {
+    const counts = channelCounts.value
+    counts.set(channel, (counts.get(channel) ?? 0) + 1)
+  }
+
+  function release(channel: string) {
+    const counts = channelCounts.value
+    const left = (counts.get(channel) ?? 0) - 1
+    if (left > 0) counts.set(channel, left)
+    else counts.delete(channel)
+  }
 
   function flush() {
     frame = null
@@ -41,11 +56,17 @@ export const useMessagesStore = defineStore('messages', () => {
     const batch = pending
     pending = []
     messages.value.push(...batch)
+    for (const msg of batch) retain(msg.channel)
 
     const excess = messages.value.length - maxMessages.value
     // splice rather than slice: it keeps the array identity, so consumers
     // holding the reference are not invalidated wholesale on every eviction.
-    if (excess > 0) messages.value.splice(0, excess)
+    if (excess > 0) {
+      for (let i = 0; i < excess; i++) release(messages.value[i].channel)
+      messages.value.splice(0, excess)
+    }
+    // The Map is mutated in place, so the computed needs telling.
+    triggerRef(channelCounts)
   }
 
   function scheduleFlush() {
@@ -71,6 +92,8 @@ export const useMessagesStore = defineStore('messages', () => {
   function clear() {
     pending = []
     messages.value = []
+    channelCounts.value.clear()
+    triggerRef(channelCounts)
   }
 
   /** Align the client's retention with what the server can still describe. */
@@ -78,7 +101,11 @@ export const useMessagesStore = defineStore('messages', () => {
     if (!Number.isFinite(limit) || limit < 1) return
     maxMessages.value = Math.floor(limit)
     const excess = messages.value.length - maxMessages.value
-    if (excess > 0) messages.value.splice(0, excess)
+    if (excess > 0) {
+      for (let i = 0; i < excess; i++) release(messages.value[i].channel)
+      messages.value.splice(0, excess)
+      triggerRef(channelCounts)
+    }
   }
 
   return { messages, messageCount, channels, maxMessages, addMessage, setMaxMessages, getByChannel, clear }

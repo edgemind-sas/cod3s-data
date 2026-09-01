@@ -49,3 +49,27 @@ class TestMessageSampler:
     def test_strategy_property(self):
         sampler = MessageSampler(strategy="every_nth")
         assert sampler.strategy == "every_nth"
+
+
+class TestPerChannelSampling:
+    """Each channel is sampled on its own quota.
+
+    A single shared counter let a fast channel consume it: at `every_nth` 10,
+    with one channel publishing far more often than another, the quiet channel
+    was almost never the tenth message and effectively vanished from the UI.
+    """
+
+    def test_every_nth_counts_per_channel(self):
+        sampler = MessageSampler(strategy="every_nth", rate=3)
+        # The busy channel must not spend the quiet one's quota.
+        for _ in range(20):
+            sampler.should_process("sensors.busy")
+        kept = [sampler.should_process("sensors.quiet") for _ in range(6)]
+        assert kept == [False, False, True, False, False, True]
+
+    def test_time_based_tracks_each_channel(self):
+        sampler = MessageSampler(strategy="time_based", interval_ms=10000)
+        assert sampler.should_process("sensors.a") is True
+        # A second channel's first message is its own, not a repeat of the first.
+        assert sampler.should_process("sensors.b") is True
+        assert sampler.should_process("sensors.a") is False

@@ -261,21 +261,48 @@ function formatTags(tags: Record<string, string> | undefined): string {
 
 // Geometry only. The strings the tooltip needs are derived from the hovered
 // message instead, so a recompute does not format a thousand of them to show one.
+// A dot's geometry only depends on the message, the origin, the scale and the
+// lane order — and the first three are held still by the grid snapping above.
+// Recomputing all of them on every arrival rebuilt hundreds of objects per
+// frame to add one; they are kept and reused until something they depend on
+// actually moves.
+let dotCache = new Map<string, DotData>()
+let dotCacheKey = ''
+
 const dots = computed<DotData[]>(() => {
   const { start } = timeRange.value
   const ppSec = pxPerSecond.value
-  return messagesStore.messages.map((msg) => {
-    const offsetSec = (Date.parse(msg.timestamp) - start) / 1000
-    const laneIdx = channelIndex.value.get(msg.channel) ?? 0
-    return {
-      messageId: msg.message_id,
-      x: offsetSec * ppSec,
-      y: AXIS_HEIGHT + laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2,
-      r: Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14),
-      color: channelColor(msg.channel),
-      msg,
+  const lanes = channelIndex.value
+
+  const key = `${start}|${ppSec}|${Array.from(lanes.keys()).join(',')}`
+  if (key !== dotCacheKey) {
+    dotCache = new Map()
+    dotCacheKey = key
+  }
+
+  const previous = dotCache
+  const current = new Map<string, DotData>()
+  const out: DotData[] = []
+  for (const msg of messagesStore.messages) {
+    let dot = previous.get(msg.message_id)
+    if (!dot) {
+      const offsetSec = (Date.parse(msg.timestamp) - start) / 1000
+      const laneIdx = lanes.get(msg.channel) ?? 0
+      dot = {
+        messageId: msg.message_id,
+        x: offsetSec * ppSec,
+        y: AXIS_HEIGHT + laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2,
+        r: Math.min(Math.max(msg.subscriber_count * 2 + 4, 4), 14),
+        color: channelColor(msg.channel),
+        msg,
+      }
     }
-  })
+    current.set(msg.message_id, dot)
+    out.push(dot)
+  }
+  // Rebuilt rather than pruned, so evicted messages cannot linger in the cache.
+  dotCache = current
+  return out
 })
 
 let userScrolled = false

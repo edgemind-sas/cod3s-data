@@ -83,6 +83,11 @@ class ObservatoryBridge:
 
     async def stop(self) -> None:
         """Stop the Observatory server."""
+        # Anything still queued goes out before the sockets close.
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.stop()
+
         # Close all WebSocket connections
         try:
             if self._ws is not None:
@@ -128,6 +133,18 @@ class ObservatoryBridge:
     def _get_parent_id(self, message_id: str) -> str:
         """Get the parent message_id, or empty string if root."""
         return self._parent_ids.get(message_id, "")
+
+    def _observed_trace(self, message_id: str) -> str | None:
+        """The trace of a message whose publication was recorded, else None.
+
+        A message enters `_trace_ids` when its publication is observed, so the
+        absence of an entry means the sampler skipped it. The reception and
+        processing hooks used to record their steps regardless, which both cost
+        work on messages nothing would ever show, and produced journeys holding
+        receptions whose publication was missing — the Inspector then had to
+        invent a parent for them.
+        """
+        return self._trace_ids.get(message_id)
 
     # --- Component resolution ---
 
@@ -282,24 +299,27 @@ class ObservatoryBridge:
                 },
             )
             self._buffer.push(event)
-            await self._ws.broadcast_event("message.published", event.data)
+            # Queued, not awaited: this runs inside `broker.publish()`, and the
+            # pipeline should not wait on a socket to keep moving.
+            self._ws.queue_event("message.published", event.data)
 
             # Store complete message details
             if self._message_store is not None:
-                try:
-                    msg_dict = message.to_dict() if hasattr(message, "to_dict") else {}
+                with contextlib.suppress(Exception):
                     self._message_store.store(
                         msg_id,
                         channel,
-                        msg_dict,
+                        {},
                         subscriber_count,
                         trace_id,
                         # The buffered event's own timestamp, so a row hydrated
                         # from the snapshot and its detail show the same instant.
                         observed_at=event.timestamp.isoformat(),
+                        # Rendered only if the message is ever opened: the dump
+                        # was being paid on every publication for the few that
+                        # someone actually inspects.
+                        message=message,
                     )
-                except Exception:
-                    pass
 
             # Record PUBLISHED journey step with resolved publisher
             if self._journey_store is not None:
@@ -335,7 +355,9 @@ class ObservatoryBridge:
             if self._journey_store is None:
                 return
             msg_id = str(getattr(message, "id", ""))
-            trace_id = self._trace_ids.get(msg_id, msg_id)
+            trace_id = self._observed_trace(msg_id)
+            if trace_id is None:
+                return
             stage = "DELIVERED" if component_type == "destination" else "RECEIVED"
             label = self._resolve_label(component_id)
             channel = self._find_receive_channel(component_id, trace_id, msg_id)
@@ -365,7 +387,9 @@ class ObservatoryBridge:
         """Called after a transformation has produced its outputs."""
         try:
             input_id = str(getattr(input_message, "id", ""))
-            trace_id = self._trace_ids.get(input_id, input_id)
+            trace_id = self._observed_trace(input_id)
+            if trace_id is None:
+                return
 
             if self._journey_store is not None:
                 label = self._resolve_label(component_id)

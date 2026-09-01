@@ -79,11 +79,20 @@ class EventBuffer:
         event_type: EventType | None = None,
     ) -> list[dict[str, Any]]:
         """Get recent events, optionally filtered by type."""
-        if event_type is not None:
-            events = [e for e in self._buffer if e.type == event_type]
-        else:
-            events = list(self._buffer)
-        return [e.to_dict() for e in events[-limit:]]
+        if limit <= 0:
+            return []
+        # Walked backwards and stopped as soon as `limit` are in hand, rather
+        # than filtering the whole buffer to keep its tail. `get_snapshot` asks
+        # six times in a row, and each ask used to scan every retained event.
+        selected: list[ObservatoryEvent] = []
+        for event in reversed(self._buffer):
+            if event_type is not None and event.type is not event_type:
+                continue
+            selected.append(event)
+            if len(selected) == limit:
+                break
+        selected.reverse()
+        return [e.to_dict() for e in selected]
 
     def get_channel_messages(self, channel: str, limit: int = 50) -> list[dict[str, Any]]:
         """Get recent messages from a specific channel."""

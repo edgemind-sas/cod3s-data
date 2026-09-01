@@ -837,3 +837,36 @@ class TestObservedAt:
         # And the publication is stamped with the Observatory's clock, not it.
         assert detail["observed_at"]
         assert not detail["observed_at"].startswith("2026-02-26T13:54:30")
+
+
+class TestSamplingIsCoherent:
+    """A skipped publication skips its receptions too.
+
+    Only `on_message_published` consulted the sampler. Receptions and processing
+    steps were recorded whatever it decided, so a sampled run cost the same work
+    on the hooks that matter most and produced journeys holding receptions whose
+    publication was missing — the Inspector then had to invent a parent.
+    """
+
+    async def test_unsampled_message_records_no_journey(self):
+        js = JourneyStore()
+        # `every_nth` at 2: the first publication is skipped, the second kept.
+        bridge = _make_bridge(
+            sampler=MessageSampler(strategy="every_nth", rate=2), journey_store=js
+        )
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "sensors.temperature")],
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "alerts.high")],
+        )
+
+        skipped = _make_message()
+        await bridge.on_message_published("sensors.temperature", skipped, 1)
+        await bridge.on_message_received("tfm-0", "transformation", skipped)
+        assert js.get_journey(str(skipped.id)) is None
+
+        kept = _make_message()
+        await bridge.on_message_published("sensors.temperature", kept, 1)
+        await bridge.on_message_received("tfm-0", "transformation", kept)
+        journey = js.get_journey(str(kept.id))
+        assert journey is not None
+        assert [s["stage"] for s in journey] == ["PUBLISHED", "RECEIVED"]

@@ -25,8 +25,12 @@ class MessageSampler:
         self._strategy = strategy
         self._rate = max(1, rate)
         self._interval_s = interval_ms / 1000.0
-        self._counter: int = 0
-        self._last_process_time: float = 0.0
+        # Per channel, both of them. A single shared counter let a fast channel
+        # consume the quota and starve the slow ones: with `every_nth` at 10 and
+        # one channel publishing a hundred times more than another, the quiet
+        # channel was almost never the Nth message and effectively disappeared.
+        self._counters: dict[str, int] = {}
+        self._last_process_time: dict[str, float] = {}
 
     def should_process(self, channel: str) -> bool:
         """Determine if this message should be processed by the Observatory."""
@@ -38,13 +42,14 @@ class MessageSampler:
             return True
 
         if self._strategy == "every_nth":
-            self._counter += 1
-            return self._counter % self._rate == 0
+            count = self._counters.get(channel, 0) + 1
+            self._counters[channel] = count
+            return count % self._rate == 0
 
         if self._strategy == "time_based":
             now = time.monotonic()
-            if now - self._last_process_time >= self._interval_s:
-                self._last_process_time = now
+            if now - self._last_process_time.get(channel, 0.0) >= self._interval_s:
+                self._last_process_time[channel] = now
                 return True
             return False
 

@@ -99,6 +99,17 @@ export const useConnectionStore = defineStore('connection', () => {
     const parametersStore = useParametersStore()
 
     switch (msg.type) {
+      // High-frequency events arrive coalesced: one frame carrying a window of
+      // envelopes, rather than one frame per published message. Each is
+      // dispatched exactly as if it had come on its own.
+      case 'batch': {
+        const events = (msg.payload as any)?.events
+        if (Array.isArray(events)) {
+          for (const event of events) handleMessage(event as WsMessage)
+        }
+        break
+      }
+
       case 'connected':
         serverVersion.value = (msg.payload.server_version as string) || ''
         // Before hydrating: the cap decides what the snapshot is trimmed to.
