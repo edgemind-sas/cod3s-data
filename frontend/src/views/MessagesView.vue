@@ -24,6 +24,10 @@
           style="max-width: 260px"
         />
 
+        <!-- The count matters more than it looks: alarms are published on
+             transitions only, so a channel like `alerts.temperature` holds one
+             or two messages among five hundred. Without a number next to it,
+             a rare channel looks exactly like a busy one. -->
         <v-chip
           v-for="ch in messagesStore.channels"
           :key="ch"
@@ -33,6 +37,7 @@
           @click="toggleChannel(ch)"
         >
           {{ ch }}
+          <span class="chip-count">{{ messagesStore.channelCounts.get(ch) ?? 0 }}</span>
         </v-chip>
 
         <v-spacer />
@@ -42,6 +47,10 @@
           <span v-if="filtered.total > filteredMessages.length">
             (showing the {{ filteredMessages.length }} most recent)
           </span>
+          <!-- The window the store covers. It is what explains a missing
+               alarm: retention is counted in messages, so a fast pipeline
+               leaves only seconds of history. -->
+          <span v-if="historyLabel" class="ml-1">&middot; {{ historyLabel }} of history</span>
         </span>
 
         <v-btn
@@ -167,6 +176,14 @@ const filtered = computed(() => {
 
 const filteredMessages = computed(() => filtered.value.rows)
 
+const historyLabel = computed(() => {
+  const secs = messagesStore.historySeconds
+  if (!secs) return ''
+  if (secs < 90) return `${secs.toFixed(0)}s`
+  if (secs < 5400) return `${(secs / 60).toFixed(0)}min`
+  return `${(secs / 3600).toFixed(1)}h`
+})
+
 function formatTime(ts: string): string {
   try {
     const d = new Date(ts)
@@ -220,6 +237,12 @@ watch(autoScroll, (on) => {
 }
 .message-row {
   cursor: pointer;
+}
+.chip-count {
+  margin-left: 6px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
 }
 .inspector-selected {
   background: rgba(var(--v-theme-primary), 0.08) !important;

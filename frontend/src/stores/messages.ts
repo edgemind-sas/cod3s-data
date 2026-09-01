@@ -122,5 +122,24 @@ export const useMessagesStore = defineStore('messages', () => {
     }
   }
 
-  return { messages, messageCount, channels, maxMessages, addMessage, setMaxMessages, getByChannel, clear }
+  /** How much wall-clock time the retained messages cover, in seconds. */
+  const historySeconds = computed(() => {
+    const all = messages.value
+    if (all.length < 2) return 0
+    const span = Date.parse(all[all.length - 1].timestamp) - Date.parse(all[0].timestamp)
+    return Number.isFinite(span) ? Math.max(span, 0) / 1000 : 0
+  })
+
+  return {
+    messages,
+    messageCount,
+    channels,
+    channelCounts,
+    historySeconds,
+    maxMessages,
+    addMessage,
+    setMaxMessages,
+    getByChannel,
+    clear,
+  }
 })
