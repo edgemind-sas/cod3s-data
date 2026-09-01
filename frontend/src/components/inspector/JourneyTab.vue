@@ -5,35 +5,54 @@
     </div>
 
     <template v-else>
+      <!-- One trace covers a whole fan-out: an EGM reading becomes six sensor
+           messages, each smoothed, throttled, alarmed and written. Showing all
+           of it to explain one message buries it under five branches it never
+           touched. The lineage of the inspected message is the default; the
+           whole trace stays one click away. -->
+      <div class="d-flex align-center mb-1 px-1">
+        <v-btn-toggle v-model="scope" mandatory density="compact" variant="outlined" divided>
+          <v-btn value="lineage" size="x-small">This message</v-btn>
+          <v-btn value="trace" size="x-small">Whole trace</v-btn>
+        </v-btn-toggle>
+        <span class="text-caption text-medium-emphasis ml-3">
+          {{ renderedCount }} of {{ journey.length }} steps
+          <span v-if="leafCount > 1">&middot; {{ leafCount }} branches</span>
+          <!-- Span, not latency: the steps of every branch are interleaved in
+               one list, so first-to-last measures the trace, not a path. -->
+          &middot; span {{ delta(firstTimestamp, lastTimestamp) }}
+        </span>
+      </div>
+
       <JourneyBranch
         v-for="(root, i) in tree"
         :key="i"
         :node="root"
         :root-timestamp="firstTimestamp"
+        :highlight-message-id="detail.message_id"
       />
-
-      <div v-if="journey.length >= 2" class="text-caption text-medium-emphasis mt-2 pa-2">
-        <!-- Span, not latency: the steps of every branch are interleaved in one
-             list, so first-to-last measures the whole trace, not a path. -->
-        Span: {{ delta(firstTimestamp, lastTimestamp) }}
-        &middot; {{ journey.length }} steps
-        <span v-if="leafCount > 1">
-          &middot; {{ leafCount }} branches
-        </span>
-        <span v-if="renderedCount !== journey.length" class="text-warning">
-          &middot; {{ journey.length - renderedCount }} not shown
-        </span>
-      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { MessageDetail, JourneyTreeNode } from '@/types'
 import JourneyBranch from './JourneyBranch.vue'
 
 const props = defineProps<{ detail: MessageDetail }>()
+
+/** 'lineage' shows only what the inspected message went through. */
+const scope = ref<'lineage' | 'trace'>('lineage')
+
+interface Built {
+  roots: JourneyTreeNode[]
+  nodes: JourneyTreeNode[]
+  parents: Map<JourneyTreeNode, JourneyTreeNode>
+}
+
+// Selecting another row must not leave the previous scope in place.
+watch(() => props.detail.message_id, () => { scope.value = 'lineage' })
 
 const journey = computed(() => props.detail.journey || [])
 
@@ -66,11 +85,10 @@ const lastTimestamp = computed(() => journey.value.length ? journey.value[journe
  * the second attaches — and anything left unattached becomes a root rather than
  * being dropped.
  */
-const tree = computed((): JourneyTreeNode[] => {
+const fullTree = computed((): Built => {
   const steps = journey.value
-  if (!steps.length) return []
-
   const nodes: JourneyTreeNode[] = steps.map(step => ({ step, children: [] }))
+  if (!steps.length) return { roots: [], nodes, parents: new Map() }
 
   const publishedByMessageChannel = new Map<string, JourneyTreeNode>()
   const publishedByMessage = new Map<string, JourneyTreeNode>()
@@ -157,8 +175,49 @@ const tree = computed((): JourneyTreeNode[] => {
     }
   }
 
-  return roots
+  return { roots, nodes, parents }
 })
+
+/**
+ * The tree reduced to what the inspected message went through.
+ *
+ * Kept: the steps about the message itself, everything upstream that led to it,
+ * and everything downstream that came out of it. Dropped: the branches that
+ * split off before it — an unpack's five other sensors, each with its own
+ * smoothing, alarm and write, which say nothing about this message.
+ *
+ * Nodes are copied rather than trimmed in place, so the whole-trace view is
+ * still there when the toggle asks for it.
+ */
+const lineage = computed((): JourneyTreeNode[] => {
+  const { roots, nodes, parents } = fullTree.value
+  const target = props.detail.message_id
+  const keep = new Set<JourneyTreeNode>()
+
+  const keepSubtree = (node: JourneyTreeNode) => {
+    keep.add(node)
+    node.children.forEach(keepSubtree)
+  }
+
+  let found = false
+  for (const node of nodes) {
+    if (node.step.message_id !== target) continue
+    found = true
+    keepSubtree(node)
+    for (let up = parents.get(node); up; up = parents.get(up)) keep.add(up)
+  }
+  // A detail whose own steps are missing from the trace is better shown whole
+  // than shown empty.
+  if (!found) return roots
+
+  const copy = (node: JourneyTreeNode): JourneyTreeNode => ({
+    step: node.step,
+    children: node.children.filter(c => keep.has(c)).map(copy),
+  })
+  return roots.filter(r => keep.has(r)).map(copy)
+})
+
+const tree = computed(() => (scope.value === 'trace' ? fullTree.value.roots : lineage.value))
 
 /** Steps actually drawn, so the footer cannot claim more than the tree shows. */
 const renderedCount = computed(() => countNodes(tree.value))

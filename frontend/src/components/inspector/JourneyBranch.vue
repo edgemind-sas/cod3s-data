@@ -1,6 +1,12 @@
 <template>
   <div class="journey-node">
-    <div :class="['step-card', `step-card--${props.node.step.stage.toLowerCase()}`]">
+    <div
+      :class="[
+        'step-card',
+        `step-card--${props.node.step.stage.toLowerCase()}`,
+        { 'step-card--focus': isFocus },
+      ]"
+    >
       <v-icon :color="stageColor" size="13" class="mr-1">{{ stageIcon }}</v-icon>
       <span class="stage-name" :style="{ color: `rgb(var(--v-theme-${stageColor}))` }">
         {{ props.node.step.stage }}
@@ -22,6 +28,7 @@
         :key="i"
         :node="child"
         :root-timestamp="rootTimestamp"
+        :highlight-message-id="highlightMessageId"
       />
     </div>
   </div>
@@ -48,7 +55,13 @@ import type { JourneyTreeNode } from '@/types'
 const props = defineProps<{
   node: JourneyTreeNode
   rootTimestamp: string
+  /** The message being inspected: its own steps are marked in the lineage. */
+  highlightMessageId?: string
 }>()
+
+const isFocus = computed(
+  () => !!props.highlightMessageId && props.node.step.message_id === props.highlightMessageId
+)
 
 const stageColor = computed(() => {
   switch (props.node.step.stage) {
@@ -104,6 +117,12 @@ function delta(from: string, to: string): string {
 .step-card--received { border-left-color: rgb(var(--v-theme-warning)); }
 .step-card--processed { border-left-color: rgb(var(--v-theme-secondary)); }
 .step-card--delivered { border-left-color: rgb(var(--v-theme-success)); }
+
+/* The steps that are about the inspected message itself. */
+.step-card--focus {
+  background: rgba(var(--v-theme-primary), 0.14);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.35);
+}
 
 .stage-name {
   font-weight: 600;
