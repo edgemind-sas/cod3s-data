@@ -48,15 +48,25 @@ class TestHealth:
 
 
 class TestTopology:
+    """The endpoint describes the pipeline, refreshed by what the buffer holds.
+
+    It used to be built from buffered events alone. A component announces its
+    state and its subscriptions once, at startup, into the same ring buffer the
+    messages flow through: on a busy pipeline they are evicted within seconds,
+    and the endpoint then reported an empty pipeline. What the framework
+    declares does not expire, so it is the floor.
+    """
+
     async def test_nodes_and_edges(self, client: TestClient, bridge: ObservatoryBridge) -> None:
         await _seed_topology(bridge)
 
         body = client.get("/api/topology").json()
 
-        assert {n["id"] for n in body["nodes"]} == {"src-0", "tfm-0", "dst-0"}
-        assert all(n["state"] == "running" for n in body["nodes"])
+        # The seeded ids, plus the fixture pipeline's own components.
+        assert {"src-0", "tfm-0", "dst-0"} <= {n["id"] for n in body["nodes"]}
         # Only subscriptions, never the unsubscribes, become edges.
-        assert body["edges"] == [{"pattern": "sensors.*", "subscriber_id": "tfm-0"}]
+        assert {"pattern": "sensors.*", "subscriber_id": "tfm-0"} in body["edges"]
+        assert not any(e["pattern"] == "retired.*" for e in body["edges"])
 
     async def test_latest_state_per_component_wins(
         self, client: TestClient, bridge: ObservatoryBridge
@@ -66,10 +76,25 @@ class TestTopology:
 
         nodes = client.get("/api/topology").json()["nodes"]
 
-        assert nodes == [{"id": "src-0", "type": "source", "state": "stopped"}]
+        assert {"id": "src-0", "type": "source", "state": "stopped"} in nodes
 
-    async def test_empty_before_the_pipeline_reports_anything(self, client: TestClient) -> None:
-        assert client.get("/api/topology").json() == {"nodes": [], "edges": []}
+    async def test_reports_the_pipeline_before_any_event(self, client: TestClient) -> None:
+        # Nothing has been observed yet, but the pipeline is already known.
+        body = client.get("/api/topology").json()
+        assert [n["type"] for n in body["nodes"]] == ["source", "transformation", "destination"]
+
+    async def test_survives_a_buffer_full_of_messages(
+        self, client: TestClient, bridge: ObservatoryBridge
+    ) -> None:
+        """The startup events scroll out; the topology must not go with them."""
+        await _seed_topology(bridge)
+        for _ in range(600):
+            await bridge.on_message_published("sensors.temperature", make_message(), 1)
+
+        body = client.get("/api/topology").json()
+
+        assert body["nodes"], "the pipeline is still declared, whatever the buffer holds"
+        assert body["edges"]
 
     async def test_component_detail(self, client: TestClient, bridge: ObservatoryBridge) -> None:
         await _seed_topology(bridge)
@@ -234,3 +259,27 @@ class TestDebugRoutes:
 
         assert response.status_code == 404
         assert response.json()["detail"] == "Debug mode is not enabled"
+
+
+class TestSpaDeepLinks:
+    """A route typed or refreshed must load, not 404.
+
+    The router runs in HTML5 history mode: `/topology` is a path the browser
+    asks the server for on a fresh load. There is no such file, and the plain
+    static handler answered 404 — the pages only ever worked when reached by
+    clicking from an already-loaded one.
+    """
+
+    def test_a_route_serves_the_app(self, client: TestClient) -> None:
+        for path in ("/topology", "/timeline", "/messages", "/parameters", "/debug"):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert response.headers["content-type"].startswith("text/html"), path
+
+    def test_a_missing_bundle_still_says_so(self, client: TestClient) -> None:
+        # Answering HTML for a missing script would fail to parse, and hide why.
+        assert client.get("/assets/does-not-exist.js").status_code == 404
+
+    def test_the_api_is_untouched(self, client: TestClient) -> None:
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/components/nope").status_code == 404

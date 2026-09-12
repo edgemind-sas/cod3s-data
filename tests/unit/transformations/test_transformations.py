@@ -1,7 +1,7 @@
 """Unit tests for transformations."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -18,6 +18,7 @@ from cod3s_data.transformations import (
     MapTransform,
     MedianFilterTransform,
     MovingAverageTransform,
+    RateAlarmTransform,
     RelativeAlarmTransform,
     StatefulTransform,
     StatelessTransform,
@@ -1584,6 +1585,233 @@ class TestBoundsAlarmTransform:
             BoundsAlarmTransform(broker, "in", "out", bounds_map={"TopMIN": ["top"]})
         with pytest.raises(ValueError, match="side must be 'min' or 'max'"):
             BoundsAlarmTransform(broker, "in", "out", bounds_map={"TopMIN": ["top", "middle"]})
+
+
+def _make_event(kind: str, ts: datetime | None = None, **extra: float) -> Message:
+    """A punctual event as a detector publishes it: a kind, and where it happened."""
+    return Message(
+        key="vision5d_error",
+        timestamp=ts or datetime.now(UTC),
+        value={"original_value": {"error_type": kind, **extra}},
+        tags={"OF": "OF-1"},
+    )
+
+
+class TestRateAlarmTransform:
+    async def _rig(self, **params):
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+        transform = RateAlarmTransform(
+            broker, "in", "out", key_field="original_value.error_type", **params
+        )
+        await transform.start()
+        return broker, dest, transform
+
+    @pytest.mark.asyncio
+    async def test_burst_raises_once(self):
+        """Five events in the window with min_count=3: one ACTIVE, on the third."""
+        broker, dest, transform = await self._rig(min_count=3, window_s=1.0, hold_s=60.0)
+
+        for x in range(5):
+            await broker.publish("in", _make_event("Over Extrusion", tool_X=float(x)))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert len(msgs) == 1
+        alarm = msgs[0]
+        assert alarm.key == "vision5d_error.over_extrusion.alarm"
+        assert alarm.value["status"] == "ACTIVE"
+        assert alarm.value["direction"] == "OVER"
+        ov = alarm.value["original_value"]
+        assert ov["kind"] == "Over Extrusion"
+        assert ov["actual"] == 3 and ov["setpoint"] == 3 and ov["deviation"] == 0
+        assert ov["rate"] == 3.0
+        # Where the episode started: the first event of the window, not the third.
+        assert ov["first_event"] == {"error_type": "Over Extrusion", "tool_X": 0.0}
+        assert alarm.tags == {"OF": "OF-1"}
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_is_silent(self):
+        broker, dest, transform = await self._rig(min_count=3, window_s=1.0)
+
+        await broker.publish("in", _make_event("Over Extrusion"))
+        await broker.publish("in", _make_event("Over Extrusion"))
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_clears_after_hold(self):
+        """CLEARED comes from the ticker, hold_s after the rate dropped, with the tally."""
+        broker, dest, transform = await self._rig(
+            min_count=2, window_s=0.2, hold_s=0.3, tick_s=0.05
+        )
+
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        await broker.publish("in", _make_event("Gap", ts=t0))
+        await broker.publish("in", _make_event("Gap", ts=t0))
+        await broker.publish("in", _make_event("Gap", ts=t0))  # in the episode, not a new alarm
+        await asyncio.sleep(0.9)  # window empties at 0.2 s, hold runs to ~0.5 s
+
+        msgs = dest.get_all()
+        assert [m.value["status"] for m in msgs] == ["ACTIVE", "CLEARED"]
+        cleared = msgs[1]
+        assert cleared.key == "vision5d_error.gap.alarm"
+        assert cleared.value["direction"] == ""
+        assert cleared.timestamp == t0 + timedelta(seconds=0.3)
+        ov = cleared.value["original_value"]
+        assert ov["events"] == 3 and ov["peak_count"] == 3
+        assert ov["duration_s"] == 0.3
+        assert ov["hold_s"] == 0.3
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_new_episode_after_clear(self):
+        broker, dest, transform = await self._rig(
+            min_count=2, window_s=0.1, hold_s=0.2, tick_s=0.05
+        )
+
+        for _ in range(2):
+            await broker.publish("in", _make_event("Blob"))
+        await asyncio.sleep(0.6)
+        for _ in range(2):
+            await broker.publish("in", _make_event("Blob"))
+        await asyncio.sleep(0.6)
+
+        assert [m.value["status"] for m in dest.get_all()] == [
+            "ACTIVE",
+            "CLEARED",
+            "ACTIVE",
+            "CLEARED",
+        ]
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_trickle_below_threshold_does_not_hold_alarm(self):
+        """Once the rate is below min_count, sparse events must not restart the hold."""
+        broker, dest, transform = await self._rig(
+            min_count=3, window_s=0.2, hold_s=0.3, tick_s=0.05
+        )
+
+        for _ in range(3):
+            await broker.publish("in", _make_event("Under Extrusion"))  # burst -> ACTIVE
+        # A trickle: one event every 0.15 s, i.e. ~1 per window, well below 3.
+        for _ in range(6):
+            await asyncio.sleep(0.15)
+            await broker.publish("in", _make_event("Under Extrusion"))
+        await asyncio.sleep(0.1)
+
+        statuses = [m.value["status"] for m in dest.get_all()]
+        assert statuses == ["ACTIVE", "CLEARED"], statuses
+        # The episode ended ~0.5 s after the burst, not after the last trickle event.
+        cleared = dest.get_all()[1]
+        assert cleared.value["original_value"]["duration_s"] < 0.5
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_kind_thresholds_and_state(self):
+        """A mapping gives each kind its threshold; unmapped kinds are not monitored."""
+        broker, dest, transform = await self._rig(
+            min_count={"Over Extrusion": 2, "under extrusion": 4}, window_s=1.0, hold_s=60.0
+        )
+
+        for _ in range(3):
+            await broker.publish("in", _make_event("Over Extrusion"))
+            await broker.publish("in", _make_event("Under Extrusion"))
+            await broker.publish("in", _make_event("Gap"))
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.key for m in msgs] == ["vision5d_error.over_extrusion.alarm"]
+        assert msgs[0].value["original_value"]["kind"] == "Over Extrusion"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_window_slides(self):
+        """Events older than the window no longer count."""
+        broker, dest, transform = await self._rig(min_count=3, window_s=0.2, hold_s=60.0)
+
+        await broker.publish("in", _make_event("Oozing"))
+        await broker.publish("in", _make_event("Oozing"))
+        await asyncio.sleep(0.3)
+        await broker.publish("in", _make_event("Oozing"))  # the two others have expired
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_kind_is_ignored(self):
+        broker, dest, transform = await self._rig(min_count=1, window_s=1.0)
+
+        await broker.publish("in", Message(key="x", timestamp=datetime.now(UTC), value=42, tags={}))
+        await broker.publish(
+            "in", Message(key="x", timestamp=datetime.now(UTC), value={"other": 1}, tags={})
+        )
+        await asyncio.sleep(0.1)
+
+        assert dest.get_all() == []
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_alarm_key_prefix_and_key_fallback(self):
+        """Without key_field the message key is the kind; the prefix names the measurement."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        dest = CollectDestination(broker, "out")
+        await dest.start()
+        transform = RateAlarmTransform(broker, "in", "out", min_count=1, alarm_key_prefix="quality")
+        await transform.start()
+
+        await broker.publish(
+            "in", Message(key="Under Extrusion", timestamp=datetime.now(UTC), value=1, tags={})
+        )
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.key for m in msgs] == ["quality.under_extrusion.alarm"]
+        assert msgs[0].value["original_value"]["first_event"] == {"value": 1}
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_rejects_bad_parameters(self):
+        broker = InMemoryBroker(enable_metrics=False)
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count=0)
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count={"a": 0})
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count=1, window_s=0)
 
 
 class TestAlarmGateTransform:

@@ -67,6 +67,23 @@ fields of each component's configuration, and the header from the pipeline's
 `display_name` and `subtitle` — see
 [Pipeline display metadata](api-reference.md#pipeline-display-metadata).
 
+### Which clock the Observatory shows
+
+A message carries two times, and they answer different questions:
+
+- **when the pipeline published it** — the Observatory's own clock;
+- **when the reading was taken** — `Message.timestamp`, set by the source.
+
+The Observatory is a debugging view of the architecture, so every page is on
+the first: the Timeline axis, the Messages table, the journey steps, and the
+Inspector's *Published* row. The source's time is what InfluxDB and Grafana
+index on, and it stays visible in the Inspector as *Source timestamp*, with the
+gap called out when the two disagree by more than a second.
+
+They coincide on a live pipeline. They diverge whenever a recorded session is
+replayed with its original timestamps, and a gap on a live pipeline means the
+source's clock has drifted from the host's — which is worth seeing.
+
 ## Configuration
 
 The `observatory:` section of a pipeline file:
@@ -80,9 +97,11 @@ observatory:
   enabled: true
   host: 127.0.0.1
   port: 8765
-  buffer_size: 1000
-  message_detail_cache_size: 500
+  history_size: 5000
+  journey_size: 500
   memory_limit_mb: 50
+  channels:
+    exclude: ["influx.**"]
   interactive: false
   debug:
     enabled: false
@@ -104,8 +123,12 @@ destinations: []
 | `enabled` | bool | `true` | |
 | `host` | str | `127.0.0.1` | **only** `127.0.0.1` or `localhost` in v1 |
 | `port` | int | `8765` | 1024–65535 |
-| `buffer_size` | int | `1000` | 100–100000 — events kept in the ring buffer |
-| `message_detail_cache_size` | int | `500` | 50–5000 — messages the Inspector can open |
+| `history_size` | int | `5000` | 50–100000 — messages the Observatory remembers |
+| `journey_size` | int | `500` | 50–20000 — journeys kept, counted in **traces** |
+| `channels.include` | list | `[]` | patterns to watch; empty watches everything |
+| `channels.exclude` | list | `[]` | patterns to drop, applied within `include` |
+| `buffer_size` | int | unset | 100–100000 — overrides `history_size` for the ring buffer |
+| `message_detail_cache_size` | int | unset | 50–5000 — overrides `history_size` for the Inspector |
 | `memory_limit_mb` | int | `50` | 10–500 — cap on the event buffer |
 | `interactive` | bool | `false` | Wait for the UI before starting the pipeline |
 | `debug.enabled` | bool | `false` | Enables the `/debug` page and the `debug.*` commands |
@@ -115,9 +138,37 @@ destinations: []
 | `sampling.rate` | int | `1` | 1–10000 — keep 1 message in N, for `every_nth` |
 | `sampling.interval_ms` | int | `100` | 10–10000 — minimum gap, for `time_based` |
 
+`channels` is the lever that matters most on a busy pipeline. Retention is
+counted in messages, so the loudest channel decides how far back the Observatory
+can see: on the six-sensor bench, `influx.smoothed` and the raw sensor channels
+are nine messages in ten, and an alarm — one message per transition — is evicted
+seconds after it fires. Excluding them buys history where it counts. Patterns are
+the broker's own (`sensors.*` for one segment, `alerts.**` for any depth), and an
+excluded channel is not observed at all: it leaves no message and no journey
+step, so a journey crossing it stops at that boundary. `_metrics.*` is never
+filtered — the Metrics page is fed by it.
+
+`journey_size` counts **traces**, not messages, and one trace covers a whole
+fan-out: some sixty steps for nineteen published messages on the bench, at about
+26 kB each. That is why it has its own budget rather than following
+`history_size` — five thousand traces would cost 129 MB against 9 MB for the
+five thousand messages themselves.
+
+`history_size` is the retention knob for the two stores counted in messages, and
+the UI follows it: the client
+keeps exactly as many rows as the server can still describe, so every listed
+message can be opened. Raising it costs memory on the process running the
+pipeline — the Inspector holds a full copy of each message, and its journey.
+The two overrides exist for a pipeline that wants to *list* far more than it
+can inspect; leave them unset unless you have measured the need, because a row
+listed beyond `message_detail_cache_size` answers "no longer available" when
+clicked.
+
 Sampling only affects what the Observatory observes. It never drops a message
 from the pipeline itself. Turn it on when a pipeline publishes faster than the
-UI can render.
+UI can render. Note that it applies to publications only: receptions and
+processing steps are always recorded, so a sampled run produces journeys whose
+publications are missing.
 
 > `host` is validated to localhost on purpose: the Observatory has no
 > authentication. To reach it from another machine, forward the port over SSH
@@ -132,7 +183,7 @@ at load time — see the full table in
 Two things specific to the Observatory: the `observatory:` section is created
 for you if a variable is set on a pipeline file that has none, and
 `message_detail_cache_size` is the one field with no variable — set it in the
-file.
+file, or use `COD3S_OBSERVATORY_HISTORY_SIZE`, which drives it.
 
 ```bash
 COD3S_OBSERVATORY_PORT=9000 COD3S_OBSERVATORY_DEBUG=true \

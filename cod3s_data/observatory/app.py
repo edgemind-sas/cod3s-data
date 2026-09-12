@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cod3s_data.observatory.routes import channels, debug, health, params, topology, ws
 
@@ -73,6 +74,31 @@ def create_app(
     # Mount static frontend (must be last - catches all remaining routes)
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists() and any(static_dir.iterdir()):
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+        app.mount("/", _SpaStaticFiles(directory=static_dir, html=True), name="static")
 
     return app
+
+
+class _SpaStaticFiles(StaticFiles):
+    """Serve the single-page app, routes included.
+
+    The router runs in HTML5 history mode, so `/topology` and its siblings are
+    paths the browser asks the server for on a fresh load or a refresh — and
+    there is no such file, so the plain static handler answered 404. They only
+    ever worked when reached by clicking from a page already loaded. The app's
+    own index answers for them instead, and the router takes it from there.
+
+    `/assets/` is deliberately excluded: a bundle file that is genuinely missing
+    must say so, not quietly return HTML that the browser then fails to parse
+    as JavaScript.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Response:
+        # A missing file is raised, not returned, so it is the exception that
+        # has to be caught rather than a status code inspected.
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as missing:
+            if missing.status_code != 404 or path.startswith("assets/"):
+                raise
+            return await super().get_response("index.html", scope)

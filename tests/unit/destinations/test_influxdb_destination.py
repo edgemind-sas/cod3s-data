@@ -133,6 +133,19 @@ class TestMessageToPoint:
         assert "temp=22" in line
         assert "humidity=65i" in line
 
+    def test_empty_string_field_is_dropped(self) -> None:
+        """A CLEARED alarm carries direction="" — InfluxDB would misalign it on read."""
+        dest = _make_destination()
+        msg = _make_message(
+            value={"status": "CLEARED", "direction": "", "original_value": {"actual": 1.0}}
+        )
+        point = dest._message_to_point(msg)
+
+        line = point.to_line_protocol()
+        assert 'status="CLEARED"' in line
+        assert "original_value.actual=1" in line
+        assert "direction" not in line
+
     def test_measurement_from_key(self) -> None:
         """When measurement is None, message.key is used."""
         dest = _make_destination(measurement=None)

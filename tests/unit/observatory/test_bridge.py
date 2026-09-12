@@ -753,3 +753,214 @@ class TestParamEventsDoNotCorruptTopology:
 
         detail = await get_component("tfm-0", request)
         assert detail == {"id": "tfm-0", "type": "transformation", "state": "running"}
+
+
+class TestReceiveChannelPerMessage:
+    """A component receiving several channels of one trace must not conflate them.
+
+    `_find_receive_channel` used to match the component's subscription patterns
+    against the trace's published channels and return the first hit, ignoring
+    which message was actually received. An `unpack` that fans one reading out
+    into six sensor channels therefore reported all six receptions on the first
+    channel — and the Inspector drew the five others as childless publications.
+    """
+
+    async def test_six_channels_are_not_conflated(self):
+        js = JourneyStore()
+        bridge = _make_bridge(journey_store=js)
+        keys = [
+            "temperature_top",
+            "temperature_bottom",
+            "temperature_nozzle_1",
+            "temperature_nozzle_2",
+            "vitesse_extrudeur",
+            "pressure",
+        ]
+        channels = [f"sensors.egm.{key}" for key in keys]
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "raw.egm")],
+            transformations=[
+                _FakeTransformation("tfm-unpack", ["raw.egm"], "sensors.egm"),
+                _FakeTransformation("tfm-avg", channels, "sensors.smoothed"),
+            ],
+        )
+
+        # The source message fans out into one message per sensor, all sharing
+        # the trace of the reading they came from.
+        root = _make_message(key="egm_reading")
+        await bridge.on_message_published("raw.egm", root, 1)
+        await bridge.on_message_received("tfm-unpack", "transformation", root)
+        unpacked = [_make_message(key=key) for key in keys]
+        await bridge.on_message_processed(
+            "tfm-unpack", "transformation", root, unpacked, "sensors.egm"
+        )
+        for channel, message in zip(channels, unpacked, strict=True):
+            await bridge.on_message_published(channel, message, 1)
+        for message in unpacked:
+            await bridge.on_message_received("tfm-avg", "transformation", message)
+
+        journey = js.get_journey(str(root.id))
+        assert journey is not None
+        received = [
+            s for s in journey if s["stage"] == "RECEIVED" and s["component_id"] == "tfm-avg"
+        ]
+        assert len(received) == 6
+        # Each reception reports the channel its own message was published on.
+        assert [s["channel"] for s in received] == channels
+        # And every step still names the message it is about, so the Inspector
+        # can rebuild the tree from parentage rather than from channels.
+        assert [s["message_id"] for s in received] == [str(m.id) for m in unpacked]
+        assert {s["parent_message_id"] for s in received} == {str(root.id)}
+
+
+class TestObservedAt:
+    """The detail carries the pipeline's clock alongside the source's.
+
+    The table and the Timeline plot when the Observatory saw a message; the
+    Summary tab used to show the source's timestamp instead. On a live pipeline
+    the two agree and nothing showed; replaying a recorded session with its
+    original timestamps put months between the row and the panel it opened.
+    """
+
+    async def test_detail_carries_both_clocks(self):
+        store = MessageDetailStore()
+        bridge = _make_bridge(message_store=store, journey_store=JourneyStore())
+        recorded = datetime(2026, 2, 26, 13, 54, 30, tzinfo=UTC)
+        message = _make_message(timestamp=recorded)
+
+        await bridge.on_message_published("sensors.temperature", message, 1)
+
+        detail = bridge.get_message_detail(str(message.id))
+        assert detail is not None
+        # The source's own time is untouched — Grafana indexes on it.
+        assert detail["timestamp"].startswith("2026-02-26T13:54:30")
+        # And the publication is stamped with the Observatory's clock, not it.
+        assert detail["observed_at"]
+        assert not detail["observed_at"].startswith("2026-02-26T13:54:30")
+
+
+class TestSamplingIsCoherent:
+    """A skipped publication skips its receptions too.
+
+    Only `on_message_published` consulted the sampler. Receptions and processing
+    steps were recorded whatever it decided, so a sampled run cost the same work
+    on the hooks that matter most and produced journeys holding receptions whose
+    publication was missing — the Inspector then had to invent a parent.
+    """
+
+    async def test_unsampled_message_records_no_journey(self):
+        js = JourneyStore()
+        # `every_nth` at 2: the first publication is skipped, the second kept.
+        bridge = _make_bridge(
+            sampler=MessageSampler(strategy="every_nth", rate=2), journey_store=js
+        )
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "sensors.temperature")],
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "alerts.high")],
+        )
+
+        skipped = _make_message()
+        await bridge.on_message_published("sensors.temperature", skipped, 1)
+        await bridge.on_message_received("tfm-0", "transformation", skipped)
+        assert js.get_journey(str(skipped.id)) is None
+
+        kept = _make_message()
+        await bridge.on_message_published("sensors.temperature", kept, 1)
+        await bridge.on_message_received("tfm-0", "transformation", kept)
+        journey = js.get_journey(str(kept.id))
+        assert journey is not None
+        assert [s["stage"] for s in journey] == ["PUBLISHED", "RECEIVED"]
+
+
+class TestPublisherOfSubChannels:
+    """A component publishing below its declared channel is still named.
+
+    `unpack` declares `sensors.egm` and publishes on `sensors.egm.<key>`; the
+    moving average does the same. Exact matching credited every one of those
+    publications to "broker", which is precisely what the journey exists to say.
+    """
+
+    def test_sub_channel_is_credited_to_its_component(self):
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            sources=[_FakeSource("src-0", "raw.egm", label="EGM")],
+            transformations=[
+                _FakeTransformation("tfm-unpack", ["raw.egm"], "sensors.egm", label="Unpack"),
+                _FakeTransformation(
+                    "tfm-avg", ["sensors.egm.*"], "sensors.smoothed", label="Average"
+                ),
+            ],
+        )
+
+        assert bridge._resolve_publisher("sensors.egm") == (
+            "tfm-unpack",
+            "transformation",
+            "Unpack",
+        )
+        assert bridge._resolve_publisher("sensors.egm.temperature_top") == (
+            "tfm-unpack",
+            "transformation",
+            "Unpack",
+        )
+        assert bridge._resolve_publisher("sensors.smoothed.temperature_top_smoothed") == (
+            "tfm-avg",
+            "transformation",
+            "Average",
+        )
+        # Nothing declares this one, so it stays the broker's.
+        assert bridge._resolve_publisher("unrelated.channel") == ("broker", "broker", "")
+
+    def test_the_nearest_declaration_wins(self):
+        bridge = _make_bridge()
+        bridge._framework = _FakeFramework(
+            transformations=[
+                _FakeTransformation("wide", ["in"], "sensors", label="Wide"),
+                _FakeTransformation("narrow", ["in"], "sensors.egm", label="Narrow"),
+            ],
+        )
+
+        assert bridge._resolve_publisher("sensors.egm.pressure")[0] == "narrow"
+        assert bridge._resolve_publisher("sensors.other.pressure")[0] == "wide"
+
+
+class TestChannelFiltering:
+    """An unwatched channel costs the Observatory nothing at all."""
+
+    async def test_unwatched_channel_is_not_recorded(self):
+        from cod3s_data.observatory.channel_filter import ChannelFilter
+
+        buffer = EventBuffer(max_size=100)
+        js = JourneyStore()
+        bridge = _make_bridge(buffer=buffer, journey_store=js)
+        bridge._channels = ChannelFilter(exclude=["influx.**"])
+        bridge._framework = _FakeFramework(
+            transformations=[_FakeTransformation("tfm-0", ["sensors.**"], "influx.smoothed")],
+            destinations=[_FakeDestination("dst-0", "influx.**")],
+        )
+
+        watched, ignored = _make_message(), _make_message()
+        await bridge.on_message_published("alerts.temperature", watched, 1)
+        await bridge.on_message_published("influx.smoothed", ignored, 1)
+        # The reception is skipped too: its publication was never observed.
+        await bridge.on_message_received("dst-0", "destination", ignored)
+
+        channels = [e["data"]["channel"] for e in buffer.get_recent(50, EventType.MESSAGE)]
+        assert channels == ["alerts.temperature"]
+        assert js.get_journey(str(ignored.id)) is None
+        assert js.get_journey(str(watched.id)) is not None
+
+    async def test_filtering_does_not_skew_the_sampler(self):
+        from cod3s_data.observatory.channel_filter import ChannelFilter
+
+        buffer = EventBuffer(max_size=100)
+        bridge = _make_bridge(buffer=buffer, sampler=MessageSampler(strategy="every_nth", rate=2))
+        bridge._channels = ChannelFilter(include=["alerts.**"])
+
+        # A hundred messages on an unwatched channel must not consume the
+        # sampling quota of the watched one.
+        for _ in range(100):
+            await bridge.on_message_published("influx.smoothed", _make_message(), 1)
+        for _ in range(2):
+            await bridge.on_message_published("alerts.temperature", _make_message(), 1)
+
+        assert buffer.size == 1

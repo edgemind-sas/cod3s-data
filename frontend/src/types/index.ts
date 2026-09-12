@@ -130,7 +130,10 @@ export interface MessageDetail {
   value_type: string
   tags: Record<string, string>
   subscriber_count: number
+  /** The source's own timestamp — what InfluxDB and Grafana index on. */
   timestamp: string
+  /** When the pipeline published it: the Observatory's own clock. */
+  observed_at?: string
   trace_id: string
   journey: JourneyStep[]
 }

@@ -36,8 +36,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     try:
         # Send initial state snapshot
         snapshot = buffer.get_snapshot()
+        config = getattr(websocket.app.state, "config", None)
         connected_payload: dict[str, Any] = {
             "server_version": "1.0.0",
+            # The client keeps the same number of messages the server can still
+            # describe, so no listed row is dead on click.
+            "history_size": getattr(config, "retained_details", 500),
             **snapshot,
         }
         if debug is not None:
@@ -274,7 +278,17 @@ async def _handle_command(
                 "type": "error",
                 "id": "evt-err",
                 "timestamp": now,
-                "payload": {"message": f"Message {message_id} not found"},
+                # The id travels with the error: the client shows the failure on
+                # the row it was asked about, and ignores it if the selection
+                # has moved on. Without it an inspect that missed left the panel
+                # spinning, because nothing could tell it the answer was in.
+                "payload": {
+                    "message": (
+                        f"Message {message_id} is no longer available — its details have "
+                        "been evicted from the cache."
+                    ),
+                    "message_id": message_id,
+                },
             }
         return {
             "type": "message.detail",

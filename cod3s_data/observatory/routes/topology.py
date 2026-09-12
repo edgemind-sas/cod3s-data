@@ -9,15 +9,42 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter()
 
 
+def _declared_topology(bridge: Any) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
+    """The pipeline as configured: every component, and who subscribes to what.
+
+    The buffered events alone are not enough. A component announces its state
+    and its subscriptions once, at startup, into the same ring buffer the
+    messages flow through — so on any busy pipeline they are evicted within
+    seconds and this endpoint went back to reporting an empty pipeline. What the
+    framework declares does not expire, so it is the floor; the buffer only
+    refreshes it.
+    """
+    components: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, str]] = []
+    if bridge is None:
+        return components, edges
+    snapshot = bridge.get_topology_snapshot()
+    for node in snapshot.get("nodes", []):
+        cid = node.get("component_id", "")
+        components[cid] = {
+            "id": cid,
+            "type": node.get("component_type", "unknown"),
+            "state": node.get("state", "unknown"),
+        }
+        for pattern in node.get("channels", {}).get("subscribes", []):
+            edges.append({"pattern": pattern, "subscriber_id": cid})
+    return components, edges
+
+
 @router.get("/topology")
 async def get_topology(request: Request) -> dict[str, Any]:
     """Return pipeline topology as nodes and edges."""
-    # Build topology from buffered component state events
     buffer = request.app.state.buffer
     from cod3s_data.observatory.buffer import EventType
 
-    # Collect latest state per component
-    components: dict[str, dict[str, Any]] = {}
+    components, edges = _declared_topology(getattr(request.app.state, "bridge", None))
+
+    # Then whatever the buffer still holds, which is more recent when it is there.
     state_events = buffer.get_recent(200, EventType.COMPONENT_STATE)
     for event in state_events:
         data = event["data"]
@@ -28,18 +55,20 @@ async def get_topology(request: Request) -> dict[str, Any]:
             "state": data.get("new_state", "unknown"),
         }
 
-    # Collect subscription edges
-    edges: list[dict[str, str]] = []
+    seen = {(e["pattern"], e["subscriber_id"]) for e in edges}
     sub_events = buffer.get_recent(200, EventType.SUBSCRIPTION)
     for event in sub_events:
         data = event["data"]
-        if data.get("action") == "subscribe":
-            edges.append(
-                {
-                    "pattern": data.get("pattern", ""),
-                    "subscriber_id": data.get("subscriber_id", ""),
-                }
-            )
+        if data.get("action") != "subscribe":
+            continue
+        edge = {
+            "pattern": data.get("pattern", ""),
+            "subscriber_id": data.get("subscriber_id", ""),
+        }
+        key = (edge["pattern"], edge["subscriber_id"])
+        if key not in seen:
+            seen.add(key)
+            edges.append(edge)
 
     return {
         "nodes": list(components.values()),
@@ -62,5 +91,10 @@ async def get_component(component_id: str, request: Request) -> dict[str, Any]:
                 "type": data.get("component_type", "unknown"),
                 "state": data.get("new_state", "unknown"),
             }
+
+    # Its startup event may be long evicted; the pipeline still declares it.
+    declared, _ = _declared_topology(getattr(request.app.state, "bridge", None))
+    if component_id in declared:
+        return declared[component_id]
 
     raise HTTPException(status_code=404, detail=f"Component '{component_id}' not found")

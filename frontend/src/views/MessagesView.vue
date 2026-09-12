@@ -24,6 +24,10 @@
           style="max-width: 260px"
         />
 
+        <!-- The count matters more than it looks: alarms are published on
+             transitions only, so a channel like `alerts.temperature` holds one
+             or two messages among five hundred. Without a number next to it,
+             a rare channel looks exactly like a busy one. -->
         <v-chip
           v-for="ch in messagesStore.channels"
           :key="ch"
@@ -33,12 +37,20 @@
           @click="toggleChannel(ch)"
         >
           {{ ch }}
+          <span class="chip-count">{{ messagesStore.channelCounts.get(ch) ?? 0 }}</span>
         </v-chip>
 
         <v-spacer />
 
         <span class="text-caption text-medium-emphasis">
-          {{ filteredMessages.length }} / {{ messagesStore.messageCount }} messages
+          {{ filtered.total }} / {{ messagesStore.messageCount }} messages
+          <span v-if="filtered.total > filteredMessages.length">
+            (showing the {{ filteredMessages.length }} most recent)
+          </span>
+          <!-- The window the store covers. It is what explains a missing
+               alarm: retention is counted in messages, so a fast pipeline
+               leaves only seconds of history. -->
+          <span v-if="historyLabel" class="ml-1">&middot; {{ historyLabel }} of history</span>
         </span>
 
         <v-btn
@@ -53,7 +65,7 @@
 
       <!-- Messages table -->
       <v-card>
-        <div ref="tableContainer" class="messages-table-wrap">
+        <div ref="tableContainer" class="messages-table-wrap" @scroll="onScroll">
           <v-table density="compact" hover>
             <thead>
               <tr>
@@ -67,8 +79,8 @@
             </thead>
             <tbody>
               <tr
-                v-for="(msg, i) in filteredMessages"
-                :key="i"
+                v-for="msg in filteredMessages"
+                :key="msg.uid"
                 :class="{ 'inspector-selected': msg.message_id === inspector.selectedMessageId }"
                 class="message-row"
                 @click="inspectMessage(msg.message_id)"
@@ -113,7 +125,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
-import { useMessagesStore } from '@/stores/messages'
+import { useMessagesStore, type StoredMessage } from '@/stores/messages'
 import { useInspector } from '@/composables/useInspector'
 import { channelColor } from '@/utils/channelColors'
 
@@ -135,16 +147,41 @@ function toggleChannel(ch: string) {
   selectedChannel.value = selectedChannel.value === ch ? null : ch
 }
 
-const filteredMessages = computed(() => {
-  let msgs = [...messagesStore.messages].reverse().slice(0, 200)
-  if (selectedChannel.value) {
-    msgs = msgs.filter(m => m.channel === selectedChannel.value)
+const MAX_ROWS = 200
+
+/**
+ * The newest MAX_ROWS messages the filters keep, plus how many they keep in all.
+ *
+ * One backward pass over the store: newest first without copying and reversing
+ * a thousand entries every frame, and the filters see the whole store rather
+ * than its last 200 rows — filtering after truncating meant a low-rate channel
+ * such as `params.consignes` showed nothing while the store held its messages.
+ * Rows stop accumulating at the cap; the count keeps going, so "x / y" is true.
+ */
+const filtered = computed(() => {
+  const channel = selectedChannel.value
+  const kf = keyFilter.value ? keyFilter.value.toLowerCase() : ''
+  const all = messagesStore.messages
+  const rows: StoredMessage[] = []
+  let total = 0
+  for (let i = all.length - 1; i >= 0; i--) {
+    const m = all[i]
+    if (channel && m.channel !== channel) continue
+    if (kf && !m.key?.toLowerCase().includes(kf)) continue
+    total++
+    if (rows.length < MAX_ROWS) rows.push(m)
   }
-  if (keyFilter.value) {
-    const kf = keyFilter.value.toLowerCase()
-    msgs = msgs.filter(m => m.key?.toLowerCase().includes(kf))
-  }
-  return msgs
+  return { rows, total }
+})
+
+const filteredMessages = computed(() => filtered.value.rows)
+
+const historyLabel = computed(() => {
+  const secs = messagesStore.historySeconds
+  if (!secs) return ''
+  if (secs < 90) return `${secs.toFixed(0)}s`
+  if (secs < 5400) return `${(secs / 60).toFixed(0)}min`
+  return `${(secs / 3600).toFixed(1)}h`
 })
 
 function formatTime(ts: string): string {
@@ -158,20 +195,39 @@ function formatTime(ts: string): string {
   }
 }
 
-function scrollToBottom() {
+// Newest first, so following the flow means staying at the TOP. Scrolling to
+// the bottom sent the view to the oldest row on every arrival — away from what
+// had just come in.
+function scrollToNewest() {
   if (tableContainer.value) {
-    tableContainer.value.scrollTop = tableContainer.value.scrollHeight
+    tableContainer.value.scrollTop = 0
   }
+}
+
+// Scrolling down means the user is reading older rows; auto-scroll steps aside
+// until they come back to the top, as the Timeline already does.
+let userScrolled = false
+
+function onScroll() {
+  if (!tableContainer.value) return
+  userScrolled = tableContainer.value.scrollTop > 8
 }
 
 watch(
   () => messagesStore.messageCount,
   () => {
-    if (autoScroll.value) {
-      nextTick(scrollToBottom)
+    if (autoScroll.value && !userScrolled) {
+      nextTick(scrollToNewest)
     }
   }
 )
+
+watch(autoScroll, (on) => {
+  if (on) {
+    userScrolled = false
+    nextTick(scrollToNewest)
+  }
+})
 </script>
 
 <style scoped>
@@ -181,6 +237,12 @@ watch(
 }
 .message-row {
   cursor: pointer;
+}
+.chip-count {
+  margin-left: 6px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
 }
 .inspector-selected {
   background: rgba(var(--v-theme-primary), 0.08) !important;

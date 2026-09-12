@@ -33,6 +33,36 @@ class JourneyStep:
         return asdict(self)
 
 
+@dataclass
+class _StoredDetail:
+    """One cached message: its envelope, and its fields once someone asks.
+
+    `fields` is the message rendered as a dictionary. Rendering it costs a full
+    Pydantic `model_dump`, and it was paid on *every* published message for the
+    handful that ever get opened in the Inspector — so the message is kept as it
+    is and dumped on first read instead. Messages are frozen, so holding the
+    object is both cheaper than a copy and just as faithful.
+    """
+
+    message_id: str
+    channel: str
+    trace_id: str
+    subscriber_count: int
+    observed_at: str
+    message: Any = None
+    fields: dict[str, Any] | None = None
+
+    def rendered(self) -> dict[str, Any]:
+        """The message's fields, dumped once and remembered."""
+        if self.fields is None:
+            message = self.message
+            self.fields = (
+                message.to_dict() if message is not None and hasattr(message, "to_dict") else {}
+            )
+            self.message = None
+        return self.fields
+
+
 class MessageDetailStore:
     """LRU cache for complete message details.
 
@@ -42,7 +72,7 @@ class MessageDetailStore:
 
     def __init__(self, max_entries: int = 500) -> None:
         self._max_entries = max_entries
-        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._store: OrderedDict[str, _StoredDetail] = OrderedDict()
 
     def store(
         self,
@@ -51,8 +81,20 @@ class MessageDetailStore:
         message_dict: dict[str, Any],
         subscriber_count: int,
         trace_id: str,
+        observed_at: str = "",
+        message: Any = None,
     ) -> None:
-        """Store a message's complete details."""
+        """Store a message's complete details.
+
+        `observed_at` is when the pipeline published the message, as opposed to
+        the message's own `timestamp`, which is when the source says the reading
+        was taken. The Observatory is a debugging view of the pipeline, so it
+        shows the former; the latter is what InfluxDB and Grafana index on, and
+        the two diverge by design whenever a recorded session is replayed.
+
+        Pass `message` rather than `message_dict` to have the fields rendered
+        only if the message is ever opened — see `_StoredDetail`.
+        """
         # Move to end if already exists (LRU update)
         if message_id in self._store:
             self._store.move_to_end(message_id)
@@ -61,20 +103,32 @@ class MessageDetailStore:
             while len(self._store) >= self._max_entries:
                 self._store.popitem(last=False)
 
-        self._store[message_id] = {
-            "message_id": message_id,
-            "channel": channel,
-            "trace_id": trace_id,
-            "subscriber_count": subscriber_count,
-            **message_dict,
-        }
+        self._store[message_id] = _StoredDetail(
+            message_id=message_id,
+            channel=channel,
+            trace_id=trace_id,
+            subscriber_count=subscriber_count,
+            observed_at=observed_at,
+            message=message,
+            fields=None if message is not None else dict(message_dict),
+        )
 
     def get(self, message_id: str) -> dict[str, Any] | None:
         """Retrieve message details, updating LRU position."""
         if message_id not in self._store:
             return None
         self._store.move_to_end(message_id)
-        return self._store[message_id]
+        entry = self._store[message_id]
+        return {
+            "message_id": entry.message_id,
+            "channel": entry.channel,
+            "trace_id": entry.trace_id,
+            "subscriber_count": entry.subscriber_count,
+            # After the spread: the message carries its own `timestamp`, which
+            # must stay available and must not be overwritten by the envelope.
+            **entry.rendered(),
+            "observed_at": entry.observed_at,
+        }
 
     @property
     def size(self) -> int:
@@ -105,11 +159,21 @@ class JourneyStore:
             self._store[trace_id] = [step]
 
     def get_journey(self, trace_id: str) -> list[dict[str, Any]] | None:
-        """Retrieve journey steps for a trace_id."""
+        """Retrieve journey steps for a trace_id, as dictionaries."""
         if trace_id not in self._store:
             return None
         self._store.move_to_end(trace_id)
         return [step.to_dict() for step in self._store[trace_id]]
+
+    def get_steps(self, trace_id: str) -> list[JourneyStep]:
+        """The trace's steps as dataclasses, without copying them.
+
+        `get_journey` runs `asdict()` over every step, which recurses and copies;
+        on the hot path — once per message received by every component — that
+        rebuilt the whole accumulated trace just to read one field. This returns
+        the live list instead. Read it, never mutate it: it is the store's own.
+        """
+        return self._store.get(trace_id, [])
 
     @property
     def size(self) -> int:

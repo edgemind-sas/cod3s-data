@@ -97,6 +97,8 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ("COD3S_OBSERVATORY_ENABLED", "enabled", "bool"),
         ("COD3S_OBSERVATORY_HOST", "host", "str"),
         ("COD3S_OBSERVATORY_PORT", "port", "int"),
+        ("COD3S_OBSERVATORY_HISTORY_SIZE", "history_size", "int"),
+        ("COD3S_OBSERVATORY_JOURNEY_SIZE", "journey_size", "int"),
         ("COD3S_OBSERVATORY_BUFFER_SIZE", "buffer_size", "int"),
         ("COD3S_OBSERVATORY_MEMORY_LIMIT_MB", "memory_limit_mb", "int"),
     ]
@@ -107,6 +109,11 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ("COD3S_OBSERVATORY_DEBUG_AUTO_PAUSE", "auto_pause", "bool"),
     ]
 
+    obs_channels_env_map: list[tuple[str, str, str]] = [
+        ("COD3S_OBSERVATORY_CHANNELS_INCLUDE", "include", "list"),
+        ("COD3S_OBSERVATORY_CHANNELS_EXCLUDE", "exclude", "list"),
+    ]
+
     obs_sampling_env_map: list[tuple[str, str, str]] = [
         ("COD3S_OBSERVATORY_SAMPLING_STRATEGY", "strategy", "str"),
         ("COD3S_OBSERVATORY_SAMPLING_RATE", "rate", "int"),
@@ -115,7 +122,10 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
 
     has_any = any(
         os.getenv(env) is not None
-        for env, _, _ in obs_env_map + obs_debug_env_map + obs_sampling_env_map
+        for env, _, _ in obs_env_map
+        + obs_debug_env_map
+        + obs_sampling_env_map
+        + obs_channels_env_map
     )
     if not has_any:
         return config
@@ -140,6 +150,16 @@ def _apply_observatory_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
             if val is not None:
                 obs["debug"][key] = _parse_env_value(val, typ)
 
+    # Channels sub-section
+    has_channels = any(os.getenv(env) is not None for env, _, _ in obs_channels_env_map)
+    if has_channels:
+        if "channels" not in obs:
+            obs["channels"] = {}
+        for env_var, key, typ in obs_channels_env_map:
+            val = os.getenv(env_var)
+            if val is not None:
+                obs["channels"][key] = _parse_env_value(val, typ)
+
     # Sampling sub-section
     has_sampling = any(os.getenv(env) is not None for env, _, _ in obs_sampling_env_map)
     if has_sampling:
@@ -161,4 +181,7 @@ def _parse_env_value(val: str, typ: str) -> Any:
         return int(val)
     if typ == "float":
         return float(val)
+    if typ == "list":
+        # Comma-separated, because a channel pattern never contains a comma.
+        return [part.strip() for part in val.split(",") if part.strip()]
     return val
