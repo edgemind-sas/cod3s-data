@@ -23,12 +23,24 @@ def _flatten_fields(value: dict[str, Any], prefix: str = "") -> list[tuple[str, 
     dicts (e.g. alarm messages with ``original_value``) get flattened with
     dot-separated keys: ``{"original_value": {"actual": 1.0}}`` becomes
     ``[("original_value.actual", 1.0)]``.
+
+    Empty strings are **dropped**, not written. InfluxDB 2.x (observed on
+    2.7.12 and 2.8.0) accepts ``field=""`` on write but returns the series
+    misaligned on read: the empty values sink to the end of the string block
+    and every later point reports the value of an earlier one. Writing
+    ``OVER, "", UNDER, ""`` reads back as ``OVER, UNDER, "", ""``. For the
+    alarm family — whose CLEARED transitions carry ``direction: ""`` — that
+    means an ACTIVE alarm can read as having no direction while its CLEARED
+    reads ``OVER``. An absent field (null on read) is the faithful encoding of
+    "no value", and it does not corrupt its neighbours.
     """
     out: list[tuple[str, Any]] = []
     for k, v in value.items():
         full_key = f"{prefix}{k}"
         if isinstance(v, dict):
             out.extend(_flatten_fields(v, prefix=f"{full_key}."))
+        elif v == "":
+            continue
         else:
             out.append((full_key, v))
     return out
