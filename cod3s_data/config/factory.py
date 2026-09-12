@@ -37,6 +37,7 @@ from cod3s_data.transformations.builtin import (
     MapTransform,
     MedianFilterTransform,
     MovingAverageTransform,
+    RateAlarmTransform,
     RelativeAlarmTransform,
     ThrottleTransform,
     UnpackTransform,
@@ -72,6 +73,7 @@ class ComponentFactory:
             "deviation_filter": self._create_deviation_filter_transform,
             "relative_alarm": self._create_relative_alarm_transform,
             "bounds_alarm": BoundsAlarmTransform,
+            "rate_alarm": RateAlarmTransform,
             "alarm_gate": AlarmGateTransform,
         }
         self._destination_registry: dict[str, Callable[..., Destination]] = {

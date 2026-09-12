@@ -1,9 +1,13 @@
 """Built-in transformations for COD3S Data Framework."""
 
+import asyncio
+import contextlib
+import re
 import statistics
+import time
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cod3s_data.broker.base import Broker
@@ -813,6 +817,268 @@ class BoundsAlarmTransform(StatefulTransform):
             },
             tags={**message.tags},
         )
+
+
+def _slug(text: str) -> str:
+    """``"Over Extrusion"`` -> ``"over_extrusion"``: a measurement-safe name."""
+    return re.sub(r"[^a-z0-9]+", "_", text.casefold()).strip("_") or "unknown"
+
+
+def _dotted_get(value: Any, path: str) -> Any:
+    """Read ``a.b.c`` from nested dicts; None when any step is missing."""
+    node = value
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+class RateAlarmTransform(StatefulTransform):
+    """Alarm on an event *rate*, per kind of event, transitions only.
+
+    The other alarms of the family watch a value. This one watches a stream of
+    punctual events and raises when they come too fast: at least ``min_count``
+    events within a sliding window of ``window_s`` seconds. It is what turns a
+    burst of detections — a quality-control camera flagging the same defect
+    dozens of times a second — into **one** alarm episode, instead of one alarm
+    per detection.
+
+    Events are grouped by *kind*, read from the message value at ``key_field``
+    (a dotted path such as ``original_value.error_type``). Each kind has its own
+    state, its own threshold, and its own measurement:
+    ``<input key>.<kind slug>.alarm`` — so a dashboard that lists alarms by
+    measurement shows one row per kind, like one row per sensor. ``min_count``
+    is either one threshold for every kind, or a mapping of kind to threshold,
+    in which case kinds absent from the mapping are not monitored at all.
+
+    Clearing needs a clock. The rest of the family clears when a *value* comes
+    back within limits; here it is the rate *falling* below the threshold that
+    clears the alarm, and a falling rate is made of events that do not arrive.
+    A ticker therefore runs every ``tick_s``, re-evaluates each window, and
+    clears an alarm once the rate has stayed below ``min_count`` for ``hold_s``
+    seconds. The hold starts when the rate drops, **not** at the last event: a
+    trickle of events below the threshold does not keep an alarm alive — for a
+    chronic, diffuse kind of event that distinction is the difference between
+    an alarm active 8 % of the time and one active 27 % of the time. The window
+    and the hold are measured on the wall clock, as the sliding-window
+    transforms do; the CLEARED message itself is stamped ``hold_s`` after the
+    last event that kept the rate above threshold, so both transitions of an
+    episode live on the event clock.
+
+    Payloads carry the family's common fields — ``status``, ``alarm_type``,
+    ``direction`` (always ``OVER``: a rate can only be exceeded), and
+    ``original_value.actual`` / ``setpoint`` / ``deviation`` as the count in
+    the window against ``min_count``, so the generic transitions table reads
+    them as it reads any other alarm. On top of that, ACTIVE carries the
+    ``rate`` and a snapshot of the first event of the episode (``first_event``:
+    where it started, for a positioned event), and CLEARED carries the episode's
+    ``events`` total, ``peak_count`` and ``duration_s``.
+    """
+
+    def __init__(
+        self,
+        broker: Broker,
+        input_channels: str | list[str],
+        output_channel: str,
+        *,
+        min_count: int | dict[str, int],
+        key_field: str | None = None,
+        window_s: float = 1.0,
+        hold_s: float = 5.0,
+        tick_s: float = 0.5,
+        alarm_key_prefix: str | None = None,
+        alarm_type_label: str = "event_rate",
+    ) -> None:
+        if window_s <= 0 or hold_s < 0 or tick_s <= 0:
+            raise ValueError("RateAlarmTransform requires window_s > 0, hold_s >= 0, tick_s > 0")
+        if isinstance(min_count, dict):
+            if not min_count or any(int(v) < 1 for v in min_count.values()):
+                raise ValueError("RateAlarmTransform: every min_count must be >= 1")
+        elif int(min_count) < 1:
+            raise ValueError("RateAlarmTransform: min_count must be >= 1")
+        super().__init__(broker, input_channels, output_channel)
+        self.key_field = key_field
+        self.window_s = float(window_s)
+        self.hold_s = float(hold_s)
+        self.tick_s = float(tick_s)
+        self.alarm_key_prefix = alarm_key_prefix
+        self.alarm_type_label = alarm_type_label
+        self._min_count: int | dict[str, int] = (
+            {str(k).casefold(): int(v) for k, v in min_count.items()}
+            if isinstance(min_count, dict)
+            else int(min_count)
+        )
+        self._ticker: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        """Subscribe, then start the ticker that clears expired alarms."""
+        await super().start()
+        self._ticker = asyncio.create_task(self._tick_loop())
+
+    async def stop(self) -> None:
+        """Stop the ticker before unsubscribing; no CLEARED is emitted on stop."""
+        if self._ticker is not None:
+            self._ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ticker
+            self._ticker = None
+        await super().stop()
+
+    def _threshold(self, kind: str) -> int | None:
+        if isinstance(self._min_count, dict):
+            return self._min_count.get(kind.casefold())
+        return self._min_count
+
+    def _kind_of(self, message: Message) -> str | None:
+        if self.key_field is None:
+            return message.key
+        kind = _dotted_get(message.value, self.key_field)
+        return None if kind is None else str(kind)
+
+    def _alarm_key(self, message: Message, kind: str) -> str:
+        prefix = self.alarm_key_prefix or message.key.removesuffix(".alarm")
+        return f"{prefix}.{_slug(kind)}.alarm"
+
+    async def transform_with_state(
+        self, message: Message, state: dict[str, Any]
+    ) -> Message | list[Message] | None:
+        """Count the event in its kind's window; raise on the crossing only.
+
+        Args:
+            message: One event. Ignored when its kind cannot be read, or has
+                no threshold.
+            state: Per-transform state, one entry per kind.
+
+        Returns:
+            An ACTIVE alarm the first time the kind's window reaches its
+            threshold, None otherwise. Clearing is the ticker's job.
+        """
+        kind = self._kind_of(message)
+        if kind is None:
+            return None
+        threshold = self._threshold(kind)
+        if threshold is None:
+            return None
+
+        now = time.monotonic()
+        kinds: dict[str, dict[str, Any]] = state.setdefault("kinds", {})
+        entry = kinds.setdefault(
+            kind, {"events": deque(), "status": "OK", "episode": None, "key": None, "tags": {}}
+        )
+        window: deque[tuple[float, Message]] = entry["events"]
+        window.append((now, message))
+        self._prune(window, now)
+        count = len(window)
+        entry["key"] = self._alarm_key(message, kind)
+        entry["tags"] = dict(message.tags)
+        if count >= threshold:
+            # The rate is above threshold *now*: the hold, if any, restarts here.
+            entry["above_mono"] = now
+            entry["above_ts"] = message.timestamp
+
+        if entry["status"] == "ALARM":
+            episode = entry["episode"]
+            episode["events"] += 1
+            episode["peak"] = max(episode["peak"], count)
+            return None
+        if count < threshold:
+            return None
+
+        first = window[0][1]
+        entry["status"] = "ALARM"
+        entry["episode"] = {"events": count, "peak": count, "started": first.timestamp}
+        return Message(
+            key=entry["key"],
+            timestamp=message.timestamp,
+            value={
+                "status": "ACTIVE",
+                "alarm_type": self.alarm_type_label,
+                "direction": "OVER",
+                "original_value": {
+                    "kind": kind,
+                    "actual": count,
+                    "setpoint": threshold,
+                    "deviation": count - threshold,
+                    "window_s": self.window_s,
+                    "rate": round(count / self.window_s, 4),
+                    "first_event": _scalar_fields(first.value),
+                },
+            },
+            tags={**message.tags},
+        )
+
+    async def _tick_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(self.tick_s)
+            async with self._lock:
+                cleared = self._clear_expired(time.monotonic())
+            for alarm in cleared:
+                await self.broker.publish(self.output_channel, alarm)
+
+    def _prune(self, window: deque[tuple[float, Message]], now: float) -> None:
+        while window and now - window[0][0] > self.window_s:
+            window.popleft()
+
+    def _clear_expired(self, now: float) -> list[Message]:
+        """CLEARED for every kind whose rate has been below threshold for the hold.
+
+        The windows are re-evaluated here as well as on arrival: with no event
+        coming in, only the ticker can notice that a window has emptied.
+        """
+        out: list[Message] = []
+        for kind, entry in self.state.get("kinds", {}).items():
+            if entry["status"] != "ALARM":
+                continue
+            self._prune(entry["events"], now)
+            if len(entry["events"]) >= (self._threshold(kind) or 1):
+                entry["above_mono"] = now
+                continue
+            if now - entry["above_mono"] < self.hold_s:
+                continue
+            episode = entry["episode"]
+            cleared_at = entry["above_ts"] + timedelta(seconds=self.hold_s)
+            duration = (cleared_at - episode["started"]).total_seconds()
+            entry["status"] = "OK"
+            entry["episode"] = None
+            entry["events"].clear()
+            out.append(
+                Message(
+                    key=entry["key"],
+                    timestamp=cleared_at,
+                    value={
+                        "status": "CLEARED",
+                        "alarm_type": self.alarm_type_label,
+                        "direction": "",
+                        "original_value": {
+                            "kind": kind,
+                            "actual": 0,
+                            "setpoint": self._threshold(kind),
+                            "deviation": -(self._threshold(kind) or 0),
+                            "window_s": self.window_s,
+                            "hold_s": self.hold_s,
+                            "events": episode["events"],
+                            "peak_count": episode["peak"],
+                            "duration_s": round(duration, 3),
+                        },
+                    },
+                    tags=dict(entry["tags"]),
+                )
+            )
+        return out
+
+
+def _scalar_fields(value: Any) -> dict[str, Any]:
+    """The scalar leaves of an event value, one level of ``original_value`` deep.
+
+    Enough to say *where* a positioned event happened (``tool_X``…) without
+    dragging nested structures into the alarm.
+    """
+    if not isinstance(value, dict):
+        return {"value": value} if isinstance(value, int | float | str | bool) else {}
+    inner = value.get("original_value")
+    source: dict[str, Any] = inner if isinstance(inner, dict) else value
+    return {k: v for k, v in source.items() if isinstance(v, int | float | str | bool)}
 
 
 class AlarmGateTransform(Transformation):

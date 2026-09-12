@@ -15,6 +15,7 @@ from cod3s_data.transformations.builtin import (
     MapTransform,
     MedianFilterTransform,
     MovingAverageTransform,
+    RateAlarmTransform,
     RelativeAlarmTransform,
     ThrottleTransform,
     UnpackTransform,
@@ -35,5 +36,6 @@ __all__ = [
     "DeviationFilterTransform",
     "RelativeAlarmTransform",
     "BoundsAlarmTransform",
+    "RateAlarmTransform",
     "AlarmGateTransform",
 ]

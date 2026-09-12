@@ -459,6 +459,89 @@ message has key `{input_key}.alarm`, inherits the input tags, and carries:
 }
 ```
 
+### RateAlarmTransform
+
+Alarm on an event **rate** rather than on a value: at least `min_count` events of
+one kind within a sliding window of `window_s` seconds. It turns a burst of
+punctual detections — a quality-control camera flagging the same defect dozens
+of times a second — into one alarm episode instead of one alarm per detection.
+
+```python
+from cod3s_data.transformations.builtin import RateAlarmTransform
+
+transform = RateAlarmTransform(
+    broker=broker,
+    input_channels="vision.events",
+    output_channel="alarms",
+    key_field="original_value.error_type",
+    window_s=1.0,
+    hold_s=5.0,
+    min_count={"Over Extrusion": 3, "Under Extrusion": 5},
+)
+```
+
+**Parameters:**
+- `min_count: int | dict[str, int]` - Events per window that raise the alarm,
+  for every kind or per kind (matched case-insensitively). With a mapping, kinds
+  absent from it are not monitored.
+- `key_field: str | None = None` - Dotted path in the message value that names
+  the kind of event; `None` uses the message key.
+- `window_s: float = 1.0` - Sliding window length
+- `hold_s: float = 5.0` - Quiet time after the last qualifying event before the
+  alarm clears
+- `tick_s: float = 0.5` - Period of the internal ticker that clears alarms
+- `alarm_key_prefix: str | None = None` - Prefix of the alarm key; defaults to
+  the input key without a trailing `.alarm`
+- `alarm_type_label: str = "event_rate"` - Value written to `alarm_type`
+
+Each kind has its own state and its own key, `{prefix}.{kind_slug}.alarm`
+(`"Over Extrusion"` → `over_extrusion`), so a dashboard that lists alarms by
+measurement shows one row per kind. Only transitions are emitted.
+
+Clearing needs a clock: a falling rate is made of events that do not arrive. A
+ticker runs every `tick_s`, re-evaluates each window, and clears an alarm once
+the rate has stayed below `min_count` for `hold_s`. The hold starts when the
+rate drops, not at the last event — a trickle of events below the threshold
+does not keep an alarm alive. The window and the hold are measured on the wall
+clock; the CLEARED message is stamped `hold_s` after the last event that kept
+the rate above threshold, so both transitions of an episode live on the event
+clock.
+
+The payload keeps the family's common fields — `actual` / `setpoint` /
+`deviation` are the count in the window against `min_count`, and `direction` is
+always `OVER` — and adds the episode's own figures:
+
+```python
+# ACTIVE — on the event that reaches the threshold
+{
+    "status": "ACTIVE",
+    "alarm_type": "event_rate",
+    "direction": "OVER",
+    "original_value": {
+        "kind": "Over Extrusion",
+        "actual": 3, "setpoint": 3, "deviation": 0,
+        "window_s": 1.0,
+        "rate": 3.0,
+        "first_event": {"error_type": "Over Extrusion", "tool_X": 412.3, ...},
+    },
+}
+# CLEARED — from the ticker, hold_s after the last event
+{
+    "status": "CLEARED",
+    "alarm_type": "event_rate",
+    "direction": "",
+    "original_value": {
+        "kind": "Over Extrusion",
+        "actual": 0, "setpoint": 3, "deviation": -3,
+        "window_s": 1.0, "hold_s": 5.0,
+        "events": 116, "peak_count": 27, "duration_s": 10.4,
+    },
+}
+```
+
+`first_event` is the scalar fields of the first event of the episode (one level
+of `original_value` deep): where a positioned event started.
+
 ### ThrottleTransform
 
 Rate-limit a stream: forward the first message, then suppress everything until
@@ -763,6 +846,7 @@ registry. Built-ins:
 | Transformation | `alarm` | `AlarmTransform` |
 | Transformation | `relative_alarm` | `RelativeAlarmTransform` |
 | Transformation | `bounds_alarm` | `BoundsAlarmTransform` |
+| Transformation | `rate_alarm` | `RateAlarmTransform` |
 | Transformation | `alarm_gate` | `AlarmGateTransform` |
 | Transformation | `throttle` | `ThrottleTransform` |
 | Transformation | `unpack` | `UnpackTransform` |
