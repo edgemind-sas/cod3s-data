@@ -15,6 +15,7 @@ from cod3s_data.destinations.base import Destination
 from cod3s_data.destinations.collect import CollectDestination
 from cod3s_data.destinations.core import ConsoleDestination, FileDestination, InMemoryDestination
 from cod3s_data.destinations.influxdb import InfluxDBDestination
+from cod3s_data.destinations.mqtt import MQTTDestination
 from cod3s_data.sources.base import Source
 from cod3s_data.sources.file_sources import (
     CSVDirectorySource,
@@ -82,6 +83,7 @@ class ComponentFactory:
             "inmemory": InMemoryDestination,
             "collect": CollectDestination,
             "influxdb": InfluxDBDestination,
+            "mqtt": MQTTDestination,
         }
 
     def _resolve_param_refs(
