@@ -1,0 +1,94 @@
+# MQTT Bridge
+# Read a broker, smooth what arrives, publish the result back — the shortest
+# pipeline that uses both MQTT bricks.
+#
+# Needs the mqtt extra and a broker:
+#   uv pip install "cod3s-data[mqtt]"
+#   docker compose -f docker-compose.mqtt.yml up -d
+#   uv run cod3s-data run examples/mqtt_bridge.yaml
+#
+# Feed it, in another shell:
+#   mosquitto_pub -t 'atelier/capteurs' \
+#     -m '{"ts": 1790000000, "session": "OF-1234", "fields": {"temperature": 293.8}}'
+#
+# Watch both outputs:
+#   mosquitto_sub -t 'atelier/lisse/#' -t 'atelier/affichage/#' -v
+
+name: mqtt_bridge
+
+broker:
+  enable_metrics: true
+  history_size: 1000
+
+sources:
+  - type: mqtt
+    label: "Capteurs de l'atelier"
+    description: "Mesures publiées par les équipements sur atelier/capteurs."
+    channel: raw.atelier
+    params:
+      host: localhost
+      port: 1883
+      topic: atelier/capteurs
+      source_format: native
+      session_field: session
+      session_tag: OF
+      default_key: capteur
+      # Credentials, when the broker asks for them. Never write the password
+      # here — the loader does not expand ${VAR}, and this file is versioned:
+      # username: gemini
+      # password_file: /run/secrets/mqtt.pwd
+
+transformations:
+  - type: unpack
+    label: "Éclatement des capteurs"
+    description: "Un flux par grandeur, pour que chacune ait son propre lissage."
+    input_channels: raw.atelier
+    output_channel: capteurs
+
+  - type: moving_average
+    label: "Lissage (10 s)"
+    description: "Moyenne glissante : filtre le bruit avant republication."
+    input_channels: capteurs.*
+    output_channel: capteurs.lisses
+    params:
+      window_type: time
+      window_duration: 10.0
+      min_samples: 3
+      key_suffix: "_lisse"
+
+destinations:
+  # Pour un autre pipeline : la charge utile `native` est exactement ce que
+  # relit une source `mqtt`, donc les deux se chaînent sans adaptateur.
+  - type: mqtt
+    label: "Republication du lissé"
+    description: "Renvoie le signal lissé sur le broker, une grandeur par topic."
+    channel_pattern: capteurs.lisses.**
+    params:
+      host: localhost
+      port: 1883
+      topic: "atelier/lisse/{key}"
+      payload_format: native
+      session_tag: OF
+      session_field: session
+      qos: 1
+      dlq_channel: rebuts.mqtt
+
+  # Pour une IHM : la valeur seule, retenue par le broker, pour qu'un écran qui
+  # se connecte en retard affiche tout de suite la dernière mesure connue.
+  - type: mqtt
+    label: "Afficheur d'atelier"
+    description: "Dernière valeur par grandeur, en clair, conservée par le broker."
+    channel_pattern: capteurs.lisses.**
+    params:
+      host: localhost
+      port: 1883
+      topic: "atelier/affichage/{key}"
+      payload_format: raw
+      retain: true
+
+  - type: console
+    label: "Journal"
+    description: "Trace locale de ce qui est republié."
+    channel_pattern: capteurs.lisses.**
+    params:
+      format: compact

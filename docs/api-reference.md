@@ -296,6 +296,92 @@ and `params.bed.setpoint`.
 
 > ParamFileSource operates in BATCH mode: it publishes once, at start.
 
+### MQTTSource
+
+Subscribe to an MQTT broker and turn each JSON payload into a message. The only
+network source, and the boundary of the pipeline: MQTT is used *between*
+machines, never inside one. Requires the optional dependency:
+
+```bash
+pip install 'cod3s-data[mqtt]'
+```
+
+```python
+from cod3s_data.sources import MQTTSource
+
+source = MQTTSource(
+    broker=broker,
+    channel="raw.egm",
+    host="192.168.1.76",
+    topic="gemini/egm",
+    session_field="OF",
+    session_tag="OF",
+    default_key="egm_reading",
+)
+```
+
+**Payload shapes** — selected by `source_format`:
+
+- `native` (default) — what a purpose-built forwarder emits:
+  `{"ts": <epoch>, "session": "<id>", "fields": {<name>: <value>}}`. The three
+  field names are configurable, so a third-party publisher that spells them
+  differently still fits.
+- `telegraf` — the JSON of Telegraf's `outputs.mqtt` with
+  `data_format = "json"`: `{"name", "timestamp", "tags", "fields"}`. The session
+  is mined out of one tag (`session_from_tag`, usually `path`) with
+  `session_regex`.
+
+In both cases `fields` becomes the message value, so a downstream `unpack`
+behaves as it would on a CSV source.
+
+**Parameters:**
+- `host: str = "localhost"` - Broker hostname
+- `port: int = 1883` - Broker port
+- `topic: str | list[str] = "#"` - Topic filter, or several filters subscribed
+  to on the same connection
+- `qos: int = 0` - Quality of service requested when subscribing
+- `client_id: str | None = None` - Client identifier; generated when absent
+- `keepalive: int = 60` - Seconds between pings on an idle connection
+- `username`, `password`, `password_env`, `password_file` - Credentials; see
+  *Connecting to a broker* below
+- `tls: bool = False`, `tls_ca`, `tls_cert`, `tls_key`, `tls_insecure` - TLS
+- `default_key: str | None = None` - Message key when the payload carries no
+  name (falls back to `mqtt_msg`)
+- `default_tags: dict[str, str] | None = None` - Tags added to every message
+- `ts_field: str = "ts"` - Payload field holding the epoch timestamp
+- `fields_field: str = "fields"` - Payload field holding the measurements
+- `session_field: str = "session"` - Payload field holding the session id
+  (`native`)
+- `session_tag: str | None = "session"` - Tag the session is written to; None
+  drops it
+- `source_format: str = "native"` - `native` or `telegraf`
+- `session_from_tag: str = "path"` - Tag mined for the session (`telegraf`)
+- `session_regex: str` - Pattern applied to it; group 1 is the session id
+- `name_as_key: bool = True` - Use the payload `name` as the key (`telegraf`)
+- `strip_suffix: str | None = None` - Suffix removed from field names —
+  `"_mean"` undoes Telegraf's `basicstats` renaming
+- `field_map: dict[str, str] | None = None` - Renaming applied after
+  `strip_suffix`
+- `field_keep: list[str] | None = None` - Keep only these (post-mapping) fields
+
+```yaml
+type: mqtt
+channel: raw.egm
+params:
+  host: 192.168.1.76
+  topic: gemini/egm
+  source_format: native
+  session_field: OF
+  session_tag: OF
+  default_key: egm_reading
+  field_keep: [temperature_top, pressure]
+```
+
+> A dropped connection is retried with an exponential backoff (1 s to 60 s)
+> rather than ending the source. Returning instead would be reported as a source
+> that *completed*, and a broker restart would stop the ingestion while the
+> pipeline still looked healthy.
+
 ## Transformations
 
 ### FilterTransform
@@ -803,6 +889,106 @@ params:
 > InfluxDB rejects a field that changes type between points. Keep a given
 > measurement's field types stable across the pipeline.
 
+### MQTTDestination
+
+Publish each message to an MQTT broker — a computed indicator, an alarm, a
+suggested setpoint — for an HMI, a PLC, or another pipeline to pick up. The
+counterpart of `MQTTSource`, with the same connection surface. Requires the
+optional dependency:
+
+```bash
+pip install 'cod3s-data[mqtt]'
+```
+
+```python
+from cod3s_data.destinations.mqtt import MQTTDestination
+
+dest = MQTTDestination(
+    broker=broker,
+    channel_pattern="alerts.**",
+    host="192.168.1.76",
+    topic="gemini/alertes/{key}",
+    session_tag="OF",
+    session_field="OF",
+    qos=1,
+)
+```
+
+**Message to payload mapping** — selected by `payload_format`:
+
+- `native` (default) — `{"ts": <epoch>, "session": "<id>", "fields": {...}}`,
+  exactly what `MQTTSource` reads back, so one pipeline can feed another with no
+  glue. A dict value contributes the fields as they are; any other value is
+  wrapped as `{"value": ...}`, the convention `InfluxDBDestination` already
+  applies. The session key is omitted when the message carries no such tag.
+- `raw` — the value alone, JSON-encoded (`293.8`, `"ACTIVE"`). What a display or
+  a controller subscribing to one topic per quantity expects, usually with
+  `retain: true` so a late subscriber gets the last value.
+
+**Topic** — a literal, or a template over the message: `{key}`, `{channel}` and
+`{tags[NAME]}`. An unknown field is rejected when the pipeline is built, not on
+the thousandth publication; a tag missing at runtime fails that message, which
+then follows the retry and dead-letter path like any other failure.
+
+**Parameters:**
+- `host: str = "localhost"` - Broker hostname
+- `port: int = 1883` - Broker port
+- `topic: str = "cod3s/{key}"` - Topic, literal or template
+- `payload_format: str = "native"` - `native` or `raw`
+- `qos: int = 0` - Quality of service of each publication
+- `retain: bool = False` - Ask the broker to keep the last message on the topic
+- `client_id: str | None = None` - Client identifier; generated when absent
+- `keepalive: int = 60` - Seconds between pings on an idle connection
+- `username`, `password`, `password_env`, `password_file` - Credentials; see
+  *Connecting to a broker* below
+- `tls: bool = False`, `tls_ca`, `tls_cert`, `tls_key`, `tls_insecure` - TLS
+- `ts_field: str = "ts"`, `fields_field: str = "fields"`,
+  `session_field: str = "session"` - Payload field names (`native`)
+- `session_tag: str | None = "session"` - Tag read to fill `session_field`;
+  None never sends one
+- `buffer_size`, `overflow_strategy`, `retry_attempts`, `retry_strategy`,
+  `dlq_channel`, `batch_size` - Inherited from `Destination`
+
+```yaml
+type: mqtt
+channel_pattern: alerts.**
+params:
+  host: 192.168.1.76
+  topic: "gemini/alertes/{key}"
+  qos: 1
+  session_tag: OF
+  session_field: OF
+  dlq_channel: rebuts.mqtt
+```
+
+> MQTT has no batch write, so `batch_size` stays at 1: each message is published
+> on its own and retried on its own. A failed publication closes the connection
+> so the next attempt reconnects rather than retrying against a dead socket.
+
+### Connecting to a broker
+
+`MQTTSource` and `MQTTDestination` share
+`cod3s_data.core.mqtt_client.MQTTConnection`, so reading from and writing to the
+same broker is spelled the same way.
+
+The password is not meant to be written in the pipeline file: the YAML loader
+does not expand `${VAR}`, so what is spelled there is a literal — and pipeline
+files are versioned. Name where the secret lives instead:
+
+```yaml
+params:
+  username: gemini
+  password_file: /run/secrets/mqtt.pwd   # or: password_env: GEMINI_MQTT_PASSWORD
+  tls: true
+  tls_ca: /etc/ssl/certs/broker-ca.pem
+```
+
+Precedence is `password_file`, then `password_env`, then `password`. A named
+source that turns out to be missing or empty is an error rather than a silent
+fallback — a typo in a variable name would otherwise surface as an
+authentication failure against the broker. `password` remains for a local broker
+or a test, and is kept out of `repr()` so it cannot reach a log line.
+
 A local server for development and for the integration tests:
 
 ```bash
@@ -858,6 +1044,7 @@ registry. Built-ins:
 | Destination | `inmemory` | `InMemoryDestination` |
 | Destination | `collect` | `CollectDestination` |
 | Destination | `influxdb` | `InfluxDBDestination` |
+| Destination | `mqtt` | `MQTTDestination` (needs the `mqtt` extra) |
 
 Plugins add their own names to the same registry — see [Plugins](#plugins).
 

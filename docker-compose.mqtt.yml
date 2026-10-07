@@ -1,0 +1,14 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    # The image ships a config that listens on localhost only and refuses
+    # anonymous clients, so the broker has to be told to be reachable. Writing
+    # the file here keeps the whole fixture in one file, as the InfluxDB one is.
+    command:
+      - sh
+      - -c
+      - |
+        printf 'listener 1883 0.0.0.0\nallow_anonymous true\n' > /mosquitto/config/mosquitto.conf
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
