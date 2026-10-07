@@ -28,6 +28,13 @@ Two payload shapes are supported through ``source_format``:
 In both cases ``fields`` becomes the message's dict value, so a downstream
 ``unpack`` behaves exactly as it would on a CSV source.
 
+A dropped connection is retried rather than reported as the end of the stream:
+see :class:`cod3s_data.core.mqtt_client.ReconnectBackoff`. The connection
+settings — credentials, TLS — are those of
+:class:`cod3s_data.core.mqtt_client.MQTTConnection`, shared with
+:class:`cod3s_data.destinations.mqtt.MQTTDestination` so that reading from and
+writing to the same broker is spelled the same way.
+
 Requires the ``mqtt`` extra::
 
     pip install cod3s-data[mqtt]
@@ -45,6 +52,7 @@ import structlog
 
 from cod3s_data.broker.base import Broker
 from cod3s_data.core.message import Message
+from cod3s_data.core.mqtt_client import MQTTConnection, ReconnectBackoff, require_aiomqtt
 from cod3s_data.sources.base import BatchMode, Source
 
 _logger = structlog.get_logger()
@@ -62,7 +70,20 @@ class MQTTSource(Source):
         channel: Target channel
         host: MQTT broker hostname
         port: MQTT broker port
-        topic: Topic filter to subscribe to (wildcards allowed)
+        topic: Topic filter to subscribe to (wildcards allowed), or a list of
+            filters to subscribe to on the same connection
+        qos: Quality of service requested when subscribing
+        client_id: MQTT client identifier; None lets the library generate one
+        keepalive: Seconds between pings on an idle connection
+        username: User name, when the broker authenticates
+        password: Password in clear; prefer ``password_env`` / ``password_file``
+        password_env: Environment variable holding the password
+        password_file: File holding the password
+        tls: Wrap the connection in TLS
+        tls_ca: Certificate authority bundle used to verify the broker
+        tls_cert: Client certificate, for mutual TLS
+        tls_key: Private key matching ``tls_cert``
+        tls_insecure: Skip hostname verification
         default_key: Message key to use when the payload carries no name
         default_tags: Tags added to every emitted message
         ts_field: Payload field holding the epoch timestamp
@@ -91,7 +112,19 @@ class MQTTSource(Source):
         *,
         host: str = "localhost",
         port: int = 1883,
-        topic: str = "#",
+        topic: str | list[str] = "#",
+        qos: int = 0,
+        client_id: str | None = None,
+        keepalive: int = 60,
+        username: str | None = None,
+        password: str | None = None,
+        password_env: str | None = None,
+        password_file: str | None = None,
+        tls: bool = False,
+        tls_ca: str | None = None,
+        tls_cert: str | None = None,
+        tls_key: str | None = None,
+        tls_insecure: bool = False,
         default_key: str | None = None,
         default_tags: dict[str, str] | None = None,
         ts_field: str = "ts",
@@ -109,9 +142,28 @@ class MQTTSource(Source):
         super().__init__(broker, channel, batch_mode=BatchMode.REALTIME)
         if source_format not in ("native", "telegraf"):
             raise ValueError(f"source_format must be 'native' or 'telegraf', got {source_format!r}")
+        self._conn = MQTTConnection(
+            host=host,
+            port=port,
+            client_id=client_id,
+            keepalive=keepalive,
+            username=username,
+            password=password,
+            password_env=password_env,
+            password_file=password_file,
+            tls=tls,
+            tls_ca=tls_ca,
+            tls_cert=tls_cert,
+            tls_key=tls_key,
+            tls_insecure=tls_insecure,
+        )
+        # Kept as attributes: the prod pipelines read them back, and a single
+        # filter stays a string so existing configs keep their shape.
         self._host = host
         self._port = port
         self._topic = topic
+        self._topics = [topic] if isinstance(topic, str) else list(topic)
+        self._qos = qos
         self._default_key = default_key
         self._default_tags = default_tags or {}
         self._ts_field = ts_field
@@ -140,27 +192,35 @@ class MQTTSource(Source):
         return out
 
     async def produce(self) -> AsyncIterator[Message]:
-        """Subscribe to the topic and yield a message per parsable payload.
+        """Subscribe to the topics and yield a message per parsable payload.
+
+        Reconnects after a dropped connection instead of ending: returning here
+        would be read by the framework as a source that completed normally, so a
+        broker restart would silently stop the ingestion.
 
         Raises:
             ImportError: If the ``mqtt`` extra is not installed
         """
-        try:
-            import aiomqtt
-        except ImportError:
-            raise ImportError(
-                "MQTTSource requires the 'mqtt' extra: pip install cod3s-data[mqtt]"
-            ) from None
+        aiomqtt = require_aiomqtt("MQTTSource")
+        backoff = ReconnectBackoff("MQTTSource")
 
-        _logger.info("mqtt.start", host=self._host, port=self._port, topic=self._topic)
-        async with aiomqtt.Client(hostname=self._host, port=self._port) as client:
-            await client.subscribe(self._topic)
-            async for mqtt_msg in client.messages:
+        _logger.info("mqtt.start", topics=self._topics, **self._conn.describe())
+        while self._running:
+            try:
+                async with self._conn.client() as client:
+                    for topic in self._topics:
+                        await client.subscribe(topic, qos=self._qos)
+                    backoff.reset()
+                    async for mqtt_msg in client.messages:
+                        if not self._running:
+                            return
+                        msg = self._parse(mqtt_msg.payload)
+                        if msg is not None:
+                            yield msg
+            except aiomqtt.MqttError as exc:
                 if not self._running:
-                    break
-                msg = self._parse(mqtt_msg.payload)
-                if msg is not None:
-                    yield msg
+                    return
+                await backoff.wait(exc, self._conn, lambda: self._running)
 
     def _parse(self, payload: bytes) -> Message | None:
         try:

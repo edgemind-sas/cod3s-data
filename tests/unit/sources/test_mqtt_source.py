@@ -12,8 +12,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from cod3s_data.broker import InMemoryBroker
-from cod3s_data.sources import MQTTSource
+aiomqtt = pytest.importorskip("aiomqtt")
+
+from cod3s_data.broker import InMemoryBroker  # noqa: E402
+from cod3s_data.sources import MQTTSource  # noqa: E402
 
 
 def _source(**kwargs) -> MQTTSource:
@@ -23,6 +25,27 @@ def _source(**kwargs) -> MQTTSource:
 
 def _payload(data: dict) -> bytes:
     return json.dumps(data).encode()
+
+
+async def _no_sleep(_delay, _is_running):
+    """Collapse the reconnection wait so the tests stay instant."""
+    return
+
+
+class _FakeConnection:
+    """Stands in for MQTTConnection: hands out scripted clients, logs nothing."""
+
+    def __init__(self, episodes, on_connect=None):
+        self._episodes = episodes
+        self._on_connect = on_connect
+
+    def client(self, **_kwargs):
+        if self._on_connect is not None:
+            self._on_connect()
+        return self._episodes.pop(0)
+
+    def describe(self):
+        return {"host": "fake", "port": 1883, "tls": False, "authenticated": False}
 
 
 class TestSourceFormatValidation:
@@ -180,3 +203,118 @@ class TestMalformedPayloads:
 
     def test_non_object_payload_is_dropped(self):
         assert _source()._parse(b"[1, 2, 3]") is None
+
+
+class TestSubscriptionOptions:
+    """What reaches the broker when the source connects."""
+
+    def test_a_single_filter_stays_a_string(self):
+        assert _source(topic="gemini/egm")._topics == ["gemini/egm"]
+
+    def test_several_filters_are_all_subscribed(self):
+        source = _source(topic=["gemini/egm", "gemini/consignes"])
+        assert source._topics == ["gemini/egm", "gemini/consignes"]
+
+    def test_connection_settings_reach_the_shared_transport(self):
+        source = _source(host="broker", port=8883, username="gemini", tls=True)
+
+        assert source._conn.host == "broker"
+        assert source._conn.port == 8883
+        assert source._conn.username == "gemini"
+        assert source._conn.tls is True
+
+
+class TestReconnection:
+    """A dropped connection must not look like the end of the stream.
+
+    Before this, an ``MqttError`` left ``produce()`` and the framework notified
+    ``running → completed``: a broker restart stopped the ingestion while the
+    pipeline still reported itself healthy.
+    """
+
+    @staticmethod
+    def _fake_client(script, on_exhausted=None):
+        """Build one scripted client per episode of ``script``.
+
+        An episode either ends on an ``MqttError`` — the source must reconnect —
+        or runs out of payloads, which stands for the framework stopping the
+        source: ``on_exhausted`` clears its running flag, exactly as ``stop()``
+        does, so the loop ends instead of asking for yet another client.
+        """
+
+        class FakeMessages:
+            def __init__(self, payloads, raise_at_end):
+                self._payloads = list(payloads)
+                self._raise = raise_at_end
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._payloads:
+                    msg = type("M", (), {"payload": self._payloads.pop(0)})()
+                    return msg
+                if self._raise:
+                    raise aiomqtt.MqttError("connection lost")
+                if on_exhausted is not None:
+                    on_exhausted()
+                raise StopAsyncIteration
+
+        class FakeClient:
+            def __init__(self, payloads, raise_at_end):
+                self.messages = FakeMessages(payloads, raise_at_end)
+                self.subscribed: list[tuple[str, int]] = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            async def subscribe(self, topic, qos=0, **_kwargs):
+                self.subscribed.append((topic, qos))
+
+        episodes = [FakeClient(payloads, raise_at_end) for payloads, raise_at_end in script]
+        return episodes
+
+    async def test_a_drop_is_followed_by_a_new_subscription(self, monkeypatch):
+        source = _source(topic="gemini/egm", qos=1)
+        episodes = self._fake_client(
+            [
+                ([_payload({"ts": 1.0, "fields": {"a": 1}})], True),  # drops
+                ([_payload({"ts": 2.0, "fields": {"a": 2}})], False),  # then stopped
+            ],
+            on_exhausted=lambda: setattr(source, "_running", False),
+        )
+        monkeypatch.setattr(source, "_conn", _FakeConnection(episodes))
+        monkeypatch.setattr("cod3s_data.core.mqtt_client._sleep_while_running", _no_sleep)
+
+        source._running = True
+        values = [msg.value async for msg in source.produce()]
+
+        assert values == [{"a": 1}, {"a": 2}]
+
+    async def test_every_filter_is_resubscribed_after_a_drop(self, monkeypatch):
+        source = _source(topic=["gemini/egm", "gemini/consignes"], qos=1)
+        episodes = self._fake_client(
+            [([], True), ([], False)],
+            on_exhausted=lambda: setattr(source, "_running", False),
+        )
+        monkeypatch.setattr(source, "_conn", _FakeConnection(list(episodes)))
+        monkeypatch.setattr("cod3s_data.core.mqtt_client._sleep_while_running", _no_sleep)
+
+        source._running = True
+        assert [msg async for msg in source.produce()] == []
+
+        for episode in episodes:
+            assert episode.subscribed == [("gemini/egm", 1), ("gemini/consignes", 1)]
+
+    async def test_a_stopped_source_does_not_reconnect(self, monkeypatch):
+        source = _source()
+        episodes = self._fake_client([([], True)])
+        conn = _FakeConnection(episodes, on_connect=lambda: setattr(source, "_running", False))
+        monkeypatch.setattr(source, "_conn", conn)
+
+        source._running = True
+        assert [msg async for msg in source.produce()] == []
+        assert episodes == []  # no second attempt
