@@ -8,6 +8,7 @@ from cod3s_data.destinations.core import (
     InMemoryDestination,
 )
 from cod3s_data.destinations.influxdb import InfluxDBDestination
+from cod3s_data.destinations.mqtt import MQTTDestination
 
 __all__ = [
     "Destination",
@@ -17,4 +18,5 @@ __all__ = [
     "InMemoryDestination",
     "CollectDestination",
     "InfluxDBDestination",
+    "MQTTDestination",
 ]

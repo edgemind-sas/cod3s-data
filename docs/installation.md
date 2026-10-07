@@ -66,6 +66,19 @@ server for development:
 docker compose -f docker-compose.influxdb.yml up -d
 ```
 
+### MQTT Source and Destination
+
+```bash
+uv pip install "cod3s-data[mqtt]"
+```
+
+Adds `aiomqtt`, required by the `mqtt` source and the `mqtt` destination. A
+local broker for development:
+
+```bash
+docker compose -f docker-compose.mqtt.yml up -d
+```
+
 ### Development Tools
 
 For development, install with dev dependencies:

@@ -422,26 +422,27 @@ from cod3s_data.core.message import Message
 from cod3s_data.sources.base import Source
 
 
-class MQTTSource(Source):
-    """Read from an MQTT broker."""
+class ModbusSource(Source):
+    """Poll a Modbus register."""
 
-    def __init__(self, broker, channel, *, topic: str, **kwargs):
+    def __init__(self, broker, channel, *, unit: int, register: int, **kwargs):
         super().__init__(broker, channel, **kwargs)
-        self.topic = topic
+        self.unit = unit
+        self.register = register
 
     async def produce(self) -> AsyncIterator[Message]:
         while self._running:
-            payload = await self._next_reading()
+            value = await self._read_register()
             yield Message(
-                key="mqtt",
+                key="modbus",
                 timestamp=datetime.now(UTC),
-                value=payload,
-                tags={"topic": self.topic},
+                value=value,
+                tags={"unit": str(self.unit)},
             )
 
 
 def register(factory):
-    factory.register_source("mqtt", MQTTSource)
+    factory.register_source("modbus", ModbusSource)
 ```
 
 Load it by module path, from the CLI or from the pipeline file:
@@ -455,11 +456,16 @@ plugins:
   - my_plugin
 
 sources:
-  - type: mqtt
-    channel: sensors.mqtt
+  - type: modbus
+    channel: sensors.modbus
     params:
-      topic: sensors/#
+      unit: 1
+      register: 40001
 ```
+
+> Pick a type name the built-ins do not already use: a plugin is loaded after
+> them and would override one silently. `mqtt`, for instance, is a built-in
+> source *and* destination.
 
 A plugin's components use the same registry as the built-ins, so they get
 `ParamRef`, the Observatory, metrics and the DLQ for free. See

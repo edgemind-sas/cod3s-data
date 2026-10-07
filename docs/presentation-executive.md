@@ -196,7 +196,7 @@ graph TB
 ## Key Capabilities
 
 ### 1. Flexible Data Ingestion
-- Multiple source types (random, files, test generators; MQTT/HTTP in V2.0)
+- Multiple source types (random, files, test generators, MQTT; HTTP in V2.0)
 - Batch modes: BATCH (finite), REALTIME (continuous), TRANSPOSE (replay, planned V1.x)
 - Backpressure-aware with bounded buffers
 
@@ -249,7 +249,7 @@ graph TB
 - 🔄 Docker containerization
 - 🔄 External databases (PostgreSQL, InfluxDB)
 - 🔄 Message brokers (Redis, RabbitMQ)
-- 🔄 MQTT, HTTP, Kafka connectors
+- 🔄 HTTP and Kafka connectors (MQTT ships, both ways)
 - 🔄 Prometheus, OpenTelemetry support
 
 ---
