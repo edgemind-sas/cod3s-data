@@ -85,7 +85,7 @@ class InfluxDBDestination(Destination):
             token="my-token",
             org="cod3s",
             bucket="sensor_data",
-            extra_tags={"printer": "gemini3d"},
+            extra_tags={"printer": "printer-1"},
         )
         await dest.start()
     """
