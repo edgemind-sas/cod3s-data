@@ -1,6 +1,6 @@
 # Backlog
 
-The backlog lives in the **[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues)**.
+The backlog lives in the project's **internal issue tracker**; the `#N` numbers below refer to it.
 Everything below was opened there in August 2026, after being verified against
 the code; this page is an index, not a second copy.
 
@@ -13,23 +13,23 @@ cleanup recovering from.
 
 None open. The seven defects opened in August are all settled.
 
-[#1](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/1) — an installed
+#1 — an installed
 package having no Observatory UI — the built artifact is now versioned and
 declared as `package-data`, and two CI jobs keep it that way.
-[#2](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/2) and
-[#3](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/3) were the two
+#2 and
+#3 were the two
 dependency defects: `msgspec` was required and imported nowhere, and the pandas
 fallback in `CSVSource` could not run. Both were removed rather than wired in.
-[#4](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/4) — a Pydantic
+#4 — a Pydantic
 description of the WebSocket protocol that nothing imported — was removed for
 the same reason, and for one more: it no longer described the protocol.
-[#5](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/5) — a timeline
+#5 — a timeline
 decided for canvas and rendered in SVG — was settled the other way round: the
 marker count is capped at 1000, so the premise of the canvas decision never
 arises, while the cost that is real, the redraw rate, is now coalesced per
 animation frame.
 
-[#18](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/18) — the three
+#18 — the three
 loose ends of the WebSocket debug plane — is fixed, and turned out to be four.
 Every debug reply now carries the controller's whole state, which is what makes
 the two orphan replies routable and what stops `set_slow_motion` announcing a
@@ -40,7 +40,7 @@ message arrives — because the wait is unbounded by design and silence was
 indistinguishable from a lost command. Both sides moved in the same change, the
 protocol tables in [docs/observatory.md](docs/observatory.md) with them.
 
-[#21](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/21) — private
+#21 — private
 attributes on `Message` that nothing read or wrote — was deletion, for the
 reason that made them unusable in the first place: `model_dump_json()` omits
 private state, so `_retry_count` could never have reached a consumer of the
@@ -58,27 +58,27 @@ The reasoning for each is in [docs/architecture.md](docs/architecture.md).
 
 None open. The five opened in August are settled.
 
-[#6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6) is fixed — the
+#6 is fixed — the
 REST routes are at 100 %, the WebSocket endpoint at 89 %, and the work found
 what the ticket predicted it would: every `/api/debug/*` route answered 500
 when the Observatory ran without `--debug`, which is the default.
 
-[#7](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/7) is fixed — the CI
+#7 is fixed — the CI
 `test` job runs an InfluxDB service and the four integration tests run against
 it. `COD3S_TEST_INFLUXDB_REQUIRED` is what keeps them running: without it, a
 broken service would send them back to the silent skip that hid them, since a
 JUnit report does not distinguish "skipped" from "passed" at a glance.
 
-[#8](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/8) is fixed — the
+#8 is fixed — the
 public methods that carried no docstring now do, and
 `tests/unit/test_public_api_docstrings.py` fails if a new one appears.
 
-[#20](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/20) is fixed — the
+#20 is fixed — the
 sequel to #8, covering the sixteen public *properties* it had left out. A
 second check reads them through `fget.__doc__`, because `inspect.getdoc` on a
 mute redefined property returns its parent's text and would let it through.
 
-[#19](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/19) is fixed —
+#19 is fixed —
 `tests/integration/test_example_scenarios.py` replays both scenario demos
 through the CLI and holds the counts the README prints: 70 raw alarms against 8
 smoothed, and the cold chain's two alarms reaching the dead-letter channel with
@@ -94,15 +94,15 @@ want; none is committed to a release.
 
 | # | | |
 |---|---|---|
-| [#9](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/9) | `DeduplicationTransform` | `évolution` |
-| [#10](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/10) | `UnitConversion` | `évolution` |
-| [#11](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/11) | `Sampler` — one message in N, unlike the time-based `throttle` | `évolution` |
-| [#12](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/12) | Dynamic channel names templated from the message | `évolution` |
-| [#13](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/13) | Strict mode for out-of-order messages | `évolution` |
-| [#15](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/15) | Tag filtering with OR semantics | `évolution` |
-| [#16](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/16) | `SourceStatus` — progress, ETA, error detail | `évolution` |
+| #9 | `DeduplicationTransform` | `évolution` |
+| #10 | `UnitConversion` | `évolution` |
+| #11 | `Sampler` — one message in N, unlike the time-based `throttle` | `évolution` |
+| #12 | Dynamic channel names templated from the message | `évolution` |
+| #13 | Strict mode for out-of-order messages | `évolution` |
+| #15 | Tag filtering with OR semantics | `évolution` |
+| #16 | `SourceStatus` — progress, ETA, error detail | `évolution` |
 
-[#14](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/14) is built — a
+#14 is built — a
 message on a dead-letter channel now carries `dlq_*` tags saying which
 destination gave up, on what exception, after how many attempts. The reasoning
 for tags over a wrapper is in [docs/architecture.md](docs/architecture.md).
@@ -114,7 +114,7 @@ names and are **not** listed: `ThresholdAlert` became `AlarmTransform`,
 
 ## Housekeeping
 
-None open. [#17](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/17) is
+None open. #17 is
 done: `old-devel` is deleted, the tutorial scaffolding is gone from the
 repository root, and the `.gitignore` data rules are anchored to the root so
 they no longer need a negation for every config file they used to swallow.

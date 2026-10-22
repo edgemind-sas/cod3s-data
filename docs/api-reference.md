@@ -312,7 +312,7 @@ from cod3s_data.sources import MQTTSource
 source = MQTTSource(
     broker=broker,
     channel="raw.egm",
-    host="192.168.1.76",
+    host="mqtt.example.com",
     topic="gemini/egm",
     session_field="OF",
     session_tag="OF",
@@ -368,7 +368,7 @@ behaves as it would on a CSV source.
 type: mqtt
 channel: raw.egm
 params:
-  host: 192.168.1.76
+  host: mqtt.example.com
   topic: gemini/egm
   source_format: native
   session_field: OF
@@ -851,7 +851,7 @@ dest = InfluxDBDestination(
     token="my-token",
     org="cod3s",
     bucket="sensor_data",
-    extra_tags={"printer": "gemini3d"},
+    extra_tags={"printer": "printer-1"},
     batch_size=100,
 )
 ```
@@ -883,7 +883,7 @@ params:
   org: cod3s
   bucket: sensor_data
   extra_tags:
-    printer: gemini3d
+    printer: printer-1
 ```
 
 > InfluxDB rejects a field that changes type between points. Keep a given
@@ -906,7 +906,7 @@ from cod3s_data.destinations.mqtt import MQTTDestination
 dest = MQTTDestination(
     broker=broker,
     channel_pattern="alerts.**",
-    host="192.168.1.76",
+    host="mqtt.example.com",
     topic="gemini/alertes/{key}",
     session_tag="OF",
     session_field="OF",
@@ -953,7 +953,7 @@ then follows the retry and dead-letter path like any other failure.
 type: mqtt
 channel_pattern: alerts.**
 params:
-  host: 192.168.1.76
+  host: mqtt.example.com
   topic: "gemini/alertes/{key}"
   qos: 1
   session_tag: OF

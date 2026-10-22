@@ -32,6 +32,9 @@ dependencies = [
     "pyyaml>=6.0,<7.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/edgemind-sas/cod3s-data"
+
 [project.optional-dependencies]
 observatory = [
     "fastapi>=0.115,<1.0",

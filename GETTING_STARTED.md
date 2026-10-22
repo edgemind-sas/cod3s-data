@@ -273,7 +273,7 @@ destinations:
       org: cod3s
       bucket: sensor_data
       extra_tags:
-        printer: gemini3d
+        printer: printer-1
       batch_size: 100
 ```
 

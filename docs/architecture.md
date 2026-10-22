@@ -10,7 +10,7 @@ survive that check. All four have since been settled: the frontend missing from
 the wheel, the pandas fallback that could not run, the msgspec dependency
 nothing imported, and the timeline decided for canvas and built in SVG. What
 remains open is tracked in the
-[issue tracker](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues).
+project's internal issue tracker, indexed in [BACKLOG.md](../BACKLOG.md).
 
 For *what* a component does, read the [API reference](api-reference.md). This
 page is about *why*.
@@ -216,7 +216,7 @@ They were removed. A stale second description of a protocol is worse than none,
 because it invites a reader to trust it. If the protocol is ever worth
 validating rather than merely documenting, the schema should be written against
 the messages that actually cross the socket, alongside the tests that exercise
-them — [issue #6](https://gitlab.edgemind.net/cod3s/cod3s-data/-/issues/6).
+them — issue #6.
 
 ### SVG for the timeline — the cost is the redraw rate, not the marker count
 

@@ -38,7 +38,6 @@ curl -X POST http://localhost:8765/api/params/params.alarm.extruder.setpoint \
 | Look up a component or a parameter | [docs/api-reference.md](docs/api-reference.md) |
 | Watch a pipeline while it runs | [docs/observatory.md](docs/observatory.md) |
 | See working pipelines | [examples/README.md](examples/README.md) — seven of them |
-| Install on Windows | [README_WINDOWS.md](README_WINDOWS.md) |
 | Understand why it is built this way | [docs/architecture.md](docs/architecture.md) |
 | Know what is missing or broken | [BACKLOG.md](BACKLOG.md) |
 
