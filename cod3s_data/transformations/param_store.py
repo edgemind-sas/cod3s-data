@@ -15,6 +15,7 @@ the value.
 from __future__ import annotations
 
 import asyncio
+import copy
 from typing import Any
 
 import structlog
@@ -75,6 +76,23 @@ class ParameterStore:
     def current(self) -> Any:
         """Last applied value (or default before any message)."""
         return self._current
+
+    def rejection(self, raw: Any) -> str | None:
+        """Why this channel value would be refused, or None if it would not.
+
+        Tries the value on a shallow copy of the owner, so that the owner's own
+        validation answers and the owner itself stays untouched.
+        """
+        if self.merge and not isinstance(raw, dict):
+            return f"{self.param_name} expects a mapping, got {raw!r}"
+        new_value = self._extract(raw)
+        if new_value is None:
+            return None
+        try:
+            setattr(copy.copy(self.owner), self.param_name, new_value)
+        except (TypeError, ValueError) as e:
+            return str(e)
+        return None
 
     async def start(self) -> None:
         """Hydrate from history then subscribe for live updates.

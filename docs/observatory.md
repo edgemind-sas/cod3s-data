@@ -279,7 +279,8 @@ curl -X POST http://localhost:8765/api/params/params.extruder.setpoint \
 ```
 
 Add `"key"` to update one entry of a dict-valued parameter channel. `400` when
-the body has no `value`.
+the body has no `value`. `422` when a component on the channel would refuse the
+value: nothing is published, and `detail` gives the component's reason.
 
 ### Debug endpoints
 
@@ -321,7 +322,7 @@ current state without replaying history — then streams events as they happen. 
 | `error.occurred` | `component_id`, `error_type`, `error_message`, `context` |
 | `pipeline.state` | Result of a `pipeline.*` command |
 | `message.detail` | Result of `message.inspect`: the full message plus its journey |
-| `param.update_result` | Result of `param.update` |
+| `param.update_result` | Result of `param.update`: `status` (`ok`, `rejected` or `error`), `channel`, and `message` when it failed. The Parameters page shows that message |
 | `debug.paused`, `debug.resumed`, `debug.granularity_set`, `debug.slow_motion_set`, `debug.step_started` | The debug state after the matching `debug.*` command: `state`, `granularity`, `breakpoints`, `slow_motion`, `slow_motion_delay_ms`, `step_count` |
 | `debug.step_result` | The same state, plus `step` describing what the step did — which channel, or which breakpoint was hit |
 | `error` | `message` — a command failed |
