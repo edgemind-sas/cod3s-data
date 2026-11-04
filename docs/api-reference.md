@@ -560,25 +560,54 @@ transform = RateAlarmTransform(
     input_channels="vision.events",
     output_channel="alarms",
     key_field="original_value.error_type",
+    min_count=20,          # every kind, including kinds never seen before
     window_s=1.0,
     hold_s=5.0,
-    min_count={"Over Extrusion": 3, "Under Extrusion": 5},
+    per_kind={
+        "Over Extrusion": {"min_count": 6},
+        "Gap": {"min_count": 130, "window_s": 10.0},
+        "Drool": {"min_count": 0},  # not monitored
+    },
 )
 ```
 
 **Parameters:**
-- `min_count: int | dict[str, int]` - Events per window that raise the alarm,
-  for every kind or per kind (matched case-insensitively). With a mapping, kinds
-  absent from it are not monitored.
+- `min_count: int | dict[str, int]` - Events per window that raise the alarm.
+  An integer applies to every kind that has no override. A mapping — the
+  original form — gives per-kind thresholds, and kinds absent from it are not
+  monitored.
 - `key_field: str | None = None` - Dotted path in the message value that names
   the kind of event; `None` uses the message key.
 - `window_s: float = 1.0` - Sliding window length
 - `hold_s: float = 5.0` - Quiet time after the last qualifying event before the
   alarm clears
+- `per_kind: dict[str, dict] | None = None` - Per-kind overrides: for each kind,
+  any of `min_count`, `window_s`, `hold_s`. A `min_count` of `0` stops
+  monitoring the kind, a `None` value drops an override, and any other key is
+  refused.
 - `tick_s: float = 0.5` - Period of the internal ticker that clears alarms
 - `alarm_key_prefix: str | None = None` - Prefix of the alarm key; defaults to
   the input key without a trailing `.alarm`
 - `alarm_type_label: str = "event_rate"` - Value written to `alarm_type`
+
+Kind names are matched case-insensitively. `min_count`, `window_s`, `hold_s` and
+`per_kind` accept a `ParamRef` and are validated whenever they are set, at
+construction or live — a rejected value leaves the previous one in force. A
+`merge: true` reference merges nested mappings, so a message
+`{"Gap": {"min_count": 140}}` changes that one value and keeps Gap's window and
+every other kind.
+
+```yaml
+params:
+  key_field: original_value.error_type
+  min_count: 20
+  per_kind:
+    ref: params.vision5d.per_kind
+    merge: true
+    default:
+      Over Extrusion: {min_count: 6}
+      Gap: {min_count: 130, window_s: 10.0}
+```
 
 Each kind has its own state and its own key, `{prefix}.{kind_slug}.alarm`
 (`"Over Extrusion"` → `over_extrusion`), so a dashboard that lists alarms by

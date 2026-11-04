@@ -1804,6 +1804,124 @@ class TestRateAlarmTransform:
         await dest.stop()
         await broker.stop()
 
+    @pytest.mark.asyncio
+    async def test_default_covers_unknown_kinds_and_overrides_win(self):
+        """A scalar min_count watches every kind; per_kind overrides it, 0 mutes."""
+        broker, dest, transform = await self._rig(
+            min_count=3,
+            per_kind={"over extrusion": {"min_count": 1}, "Gap": {"min_count": 0}},
+            window_s=1.0,
+            hold_s=60.0,
+        )
+
+        await broker.publish("in", _make_event("Over Extrusion"))  # override: 1 is enough
+        for _ in range(2):
+            await broker.publish("in", _make_event("Scars"))  # default 3: not yet
+        for _ in range(5):
+            await broker.publish("in", _make_event("Gap"))  # muted
+        await asyncio.sleep(0.1)
+        assert [m.key for m in dest.get_all()] == ["vision5d_error.over_extrusion.alarm"]
+
+        await broker.publish("in", _make_event("Scars"))  # a kind never configured
+        await asyncio.sleep(0.1)
+        assert [m.key for m in dest.get_all()][-1] == "vision5d_error.scars.alarm"
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_kind_window(self):
+        """A kind with a short window forgets events that a long-window kind still counts."""
+        broker, dest, transform = await self._rig(
+            min_count=2, window_s=1.0, per_kind={"Blob": {"window_s": 0.1}}, hold_s=60.0
+        )
+
+        await broker.publish("in", _make_event("Blob"))
+        await broker.publish("in", _make_event("Gap"))
+        await asyncio.sleep(0.3)
+        await broker.publish("in", _make_event("Blob"))  # the first Blob has expired
+        await broker.publish("in", _make_event("Gap"))  # the first Gap still counts
+        await asyncio.sleep(0.1)
+
+        msgs = dest.get_all()
+        assert [m.key for m in msgs] == ["vision5d_error.gap.alarm"]
+        assert msgs[0].value["original_value"]["window_s"] == 1.0
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_per_kind_hold(self):
+        """Each kind clears after its own hold, and says so in the payload."""
+        broker, dest, transform = await self._rig(
+            min_count=1, window_s=0.1, hold_s=0.2, per_kind={"Gap": {"hold_s": 5.0}}, tick_s=0.05
+        )
+
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        await broker.publish("in", _make_event("Blob", ts=t0))
+        await broker.publish("in", _make_event("Gap", ts=t0))
+        await asyncio.sleep(0.6)
+
+        msgs = dest.get_all()
+        cleared = [m for m in msgs if m.value["status"] == "CLEARED"]
+        assert [m.key for m in cleared] == ["vision5d_error.blob.alarm"]  # Gap still holding
+        assert cleared[0].value["original_value"]["hold_s"] == 0.2
+        assert cleared[0].timestamp == t0 + timedelta(seconds=0.2)
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    @pytest.mark.asyncio
+    async def test_muting_a_kind_in_alarm_clears_it(self):
+        """Setting a kind's min_count to 0 while it is in alarm ends the episode after hold."""
+        broker, dest, transform = await self._rig(
+            min_count=1, window_s=5.0, hold_s=0.1, tick_s=0.05
+        )
+
+        await broker.publish("in", _make_event("Gap"))
+        await asyncio.sleep(0.1)
+        transform.per_kind = {"Gap": {"min_count": 0}}
+        await broker.publish("in", _make_event("Gap"))  # ignored now
+        await asyncio.sleep(0.4)
+
+        assert [m.value["status"] for m in dest.get_all()] == ["ACTIVE", "CLEARED"]
+        assert dest.get_all()[1].value["original_value"]["setpoint"] is None
+
+        await transform.stop()
+        await dest.stop()
+        await broker.stop()
+
+    def test_live_assignment_is_validated(self):
+        """Parameters set after construction — as a ParameterStore does — are checked too."""
+        broker = InMemoryBroker(enable_metrics=False)
+        transform = RateAlarmTransform(broker, "in", "out", min_count=3)
+
+        transform.min_count = 5
+        transform.per_kind = {"Gap": {"window_s": "10"}}  # numbers may arrive as strings
+        assert transform._threshold("anything") == 5
+        assert transform._threshold("gap") == 5  # only the window is overridden
+        assert transform._window("gap") == 10.0
+
+        with pytest.raises(ValueError, match="window_s must be > 0"):
+            transform.window_s = 0
+        with pytest.raises(ValueError, match=r"per_kind\['Gap'\]\.min_count must be >= 0"):
+            transform.per_kind = {"Gap": {"min_count": -1}}
+        with pytest.raises(ValueError, match=r"unknown keys \['windows'\]"):
+            transform.per_kind = {"Gap": {"windows": 5.0}}  # a typo is not silently ignored
+        with pytest.raises(ValueError, match="must be a mapping"):
+            transform.per_kind = {"Gap": 5}
+        # A rejected value leaves the previous one in force.
+        assert transform.window_s == 1.0
+        assert transform.per_kind == {"gap": {"window_s": 10.0}}
+
+        # None drops an override: the kind falls back to the default.
+        transform.per_kind = {"Gap": {"window_s": None}, "Blob": None}
+        assert transform._window("gap") == 1.0
+        assert transform.per_kind == {"gap": {}}
+
     def test_rejects_bad_parameters(self):
         broker = InMemoryBroker(enable_metrics=False)
         with pytest.raises(ValueError):
@@ -1811,7 +1929,15 @@ class TestRateAlarmTransform:
         with pytest.raises(ValueError):
             RateAlarmTransform(broker, "in", "out", min_count={"a": 0})
         with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count={})
+        with pytest.raises(ValueError):
             RateAlarmTransform(broker, "in", "out", min_count=1, window_s=0)
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count=1, hold_s=-1)
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count=1, tick_s=0)
+        with pytest.raises(ValueError):
+            RateAlarmTransform(broker, "in", "out", min_count=1, per_kind={"a": {"hold_s": -1}})
 
 
 class TestAlarmGateTransform:
