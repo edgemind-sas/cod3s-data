@@ -124,6 +124,75 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    async def test_merge_descends_into_nested_mappings(self):
+        """A fragment changing one leaf of a nested entry keeps that entry's other leaves."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        default = {"Gap": {"min_count": 130, "window_s": 10.0}, "Blob": {"min_count": 12}}
+        owner = SimpleNamespace(per_kind=default)
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="per_kind",
+            ref="params.k",
+            default=default,
+            merge=True,
+        )
+        await store.start()
+
+        await broker.publish("params.k", _msg({"Gap": {"min_count": 140}}))
+        await asyncio.sleep(0.05)
+        await broker.publish("params.k", _msg({"Scars": {"min_count": 1}}))
+        await asyncio.sleep(0.05)
+
+        assert owner.per_kind == {
+            "Gap": {"min_count": 140, "window_s": 10.0},
+            "Blob": {"min_count": 12},
+            "Scars": {"min_count": 1},
+        }
+        assert default == {"Gap": {"min_count": 130, "window_s": 10.0}, "Blob": {"min_count": 12}}
+        await store.stop()
+        await broker.stop()
+
+    async def test_rejected_value_keeps_the_previous_one(self):
+        """A value the owner refuses changes nothing, live or replayed from history."""
+
+        class Owner:
+            def __init__(self):
+                self._limit = 10
+
+            @property
+            def limit(self):
+                return self._limit
+
+            @limit.setter
+            def limit(self, value):
+                if value < 0:
+                    raise ValueError("limit must be >= 0")
+                self._limit = value
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        await broker.publish("params.l", _msg(-1))
+
+        owner = Owner()
+        store = ParameterStore(
+            broker=broker, owner=owner, param_name="limit", ref="params.l", default=10
+        )
+        await store.start()
+        assert owner.limit == 10
+
+        await broker.publish("params.l", _msg(-2))
+        await asyncio.sleep(0.05)
+        assert owner.limit == 10
+        assert store.current == 10
+
+        await broker.publish("params.l", _msg(20))
+        await asyncio.sleep(0.05)
+        assert owner.limit == 20
+        await store.stop()
+        await broker.stop()
+
     async def test_merge_replays_whole_history_at_start(self):
         """Hydrating from the last message only would rebuild a single entry."""
         broker = InMemoryBroker(enable_metrics=False)

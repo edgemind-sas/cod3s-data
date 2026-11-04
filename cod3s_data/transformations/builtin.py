@@ -848,9 +848,18 @@ class RateAlarmTransform(StatefulTransform):
     (a dotted path such as ``original_value.error_type``). Each kind has its own
     state, its own threshold, and its own measurement:
     ``<input key>.<kind slug>.alarm`` — so a dashboard that lists alarms by
-    measurement shows one row per kind, like one row per sensor. ``min_count``
-    is either one threshold for every kind, or a mapping of kind to threshold,
-    in which case kinds absent from the mapping are not monitored at all.
+    measurement shows one row per kind, like one row per sensor.
+
+    ``min_count``, ``window_s`` and ``hold_s`` apply to every kind, including
+    kinds never seen before. ``per_kind`` overrides any of the three for the
+    kinds it names (matched case-insensitively) — ``{"Gap": {"min_count": 130,
+    "window_s": 10.0}}`` — and a ``min_count`` of 0 there stops monitoring a
+    kind; a ``None`` drops an override. Fed by a ``ParamRef`` with
+    ``merge: true``, a message carrying ``{"Gap": {"min_count": 140}}`` changes
+    that one value and leaves the rest alone. Every one of these parameters is
+    validated when it is set, at construction or live. ``min_count`` may also
+    be a mapping — the original form — in which case kinds absent from it are
+    not monitored at all.
 
     Clearing needs a clock. The rest of the family clears when a *value* comes
     back within limits; here it is the rate *falling* below the threshold that
@@ -858,9 +867,8 @@ class RateAlarmTransform(StatefulTransform):
     A ticker therefore runs every ``tick_s``, re-evaluates each window, and
     clears an alarm once the rate has stayed below ``min_count`` for ``hold_s``
     seconds. The hold starts when the rate drops, **not** at the last event: a
-    trickle of events below the threshold does not keep an alarm alive — for a
-    chronic, diffuse kind of event that distinction is the difference between
-    an alarm active 8 % of the time and one active 27 % of the time. The window
+    trickle of events below the threshold does not keep an alarm alive, which
+    matters most for a chronic, diffuse kind of event. The window
     and the hold are measured on the wall clock, as the sliding-window
     transforms do; the CLEARED message itself is stamped ``hold_s`` after the
     last event that kept the rate above threshold, so both transitions of an
@@ -886,30 +894,67 @@ class RateAlarmTransform(StatefulTransform):
         key_field: str | None = None,
         window_s: float = 1.0,
         hold_s: float = 5.0,
+        per_kind: dict[str, dict[str, Any]] | None = None,
         tick_s: float = 0.5,
         alarm_key_prefix: str | None = None,
         alarm_type_label: str = "event_rate",
     ) -> None:
-        if window_s <= 0 or hold_s < 0 or tick_s <= 0:
-            raise ValueError("RateAlarmTransform requires window_s > 0, hold_s >= 0, tick_s > 0")
-        if isinstance(min_count, dict):
-            if not min_count or any(int(v) < 1 for v in min_count.values()):
-                raise ValueError("RateAlarmTransform: every min_count must be >= 1")
-        elif int(min_count) < 1:
-            raise ValueError("RateAlarmTransform: min_count must be >= 1")
+        if tick_s <= 0:
+            raise ValueError("RateAlarmTransform requires tick_s > 0")
         super().__init__(broker, input_channels, output_channel)
         self.key_field = key_field
-        self.window_s = float(window_s)
-        self.hold_s = float(hold_s)
+        self.min_count = min_count
+        self.window_s = window_s
+        self.hold_s = hold_s
+        self.per_kind = per_kind
         self.tick_s = float(tick_s)
         self.alarm_key_prefix = alarm_key_prefix
         self.alarm_type_label = alarm_type_label
-        self._min_count: int | dict[str, int] = (
-            {str(k).casefold(): int(v) for k, v in min_count.items()}
-            if isinstance(min_count, dict)
-            else int(min_count)
-        )
         self._ticker: asyncio.Task[None] | None = None
+
+    # The tunable parameters are properties so that a ParameterStore, which
+    # rebinds them by name, goes through the same validation as the constructor.
+
+    @property
+    def min_count(self) -> int | dict[str, int]:
+        """Threshold for every kind, or a mapping outside which kinds are not monitored."""
+        return self._min_count
+
+    @min_count.setter
+    def min_count(self, value: int | dict[str, int]) -> None:
+        if isinstance(value, dict):
+            if not value:
+                raise ValueError("RateAlarmTransform: a min_count mapping must not be empty")
+            self._min_count: int | dict[str, int] = _kind_map(value, "min_count", _min_one)
+        else:
+            self._min_count = _min_one(value, "min_count")
+
+    @property
+    def window_s(self) -> float:
+        """Sliding window, in seconds, for kinds without an override."""
+        return self._window_s
+
+    @window_s.setter
+    def window_s(self, value: float) -> None:
+        self._window_s = _positive(value, "window_s")
+
+    @property
+    def hold_s(self) -> float:
+        """Quiet time before clearing, in seconds, for kinds without an override."""
+        return self._hold_s
+
+    @hold_s.setter
+    def hold_s(self, value: float) -> None:
+        self._hold_s = _non_negative(value, "hold_s")
+
+    @property
+    def per_kind(self) -> dict[str, dict[str, float]]:
+        """Per-kind overrides of min_count, window_s and hold_s, keyed case-insensitively."""
+        return self._per_kind
+
+    @per_kind.setter
+    def per_kind(self, value: dict[str, dict[str, Any]] | None) -> None:
+        self._per_kind = _per_kind_overrides(value)
 
     async def start(self) -> None:
         """Subscribe, then start the ticker that clears expired alarms."""
@@ -926,9 +971,20 @@ class RateAlarmTransform(StatefulTransform):
         await super().stop()
 
     def _threshold(self, kind: str) -> int | None:
+        """The kind's min_count; None when the kind is not monitored."""
+        key = kind.casefold()
+        overrides = self._per_kind.get(key, {})
+        if "min_count" in overrides:
+            return int(overrides["min_count"]) or None
         if isinstance(self._min_count, dict):
-            return self._min_count.get(kind.casefold())
+            return self._min_count.get(key)
         return self._min_count
+
+    def _window(self, kind: str) -> float:
+        return self._per_kind.get(kind.casefold(), {}).get("window_s", self._window_s)
+
+    def _hold(self, kind: str) -> float:
+        return self._per_kind.get(kind.casefold(), {}).get("hold_s", self._hold_s)
 
     def _kind_of(self, message: Message) -> str | None:
         if self.key_field is None:
@@ -966,9 +1022,10 @@ class RateAlarmTransform(StatefulTransform):
         entry = kinds.setdefault(
             kind, {"events": deque(), "status": "OK", "episode": None, "key": None, "tags": {}}
         )
+        window_s = self._window(kind)
         window: deque[tuple[float, Message]] = entry["events"]
         window.append((now, message))
-        self._prune(window, now)
+        self._prune(window, now, window_s)
         count = len(window)
         entry["key"] = self._alarm_key(message, kind)
         entry["tags"] = dict(message.tags)
@@ -1000,8 +1057,8 @@ class RateAlarmTransform(StatefulTransform):
                     "actual": count,
                     "setpoint": threshold,
                     "deviation": count - threshold,
-                    "window_s": self.window_s,
-                    "rate": round(count / self.window_s, 4),
+                    "window_s": window_s,
+                    "rate": round(count / window_s, 4),
                     "first_event": _scalar_fields(first.value),
                 },
             },
@@ -1016,28 +1073,33 @@ class RateAlarmTransform(StatefulTransform):
             for alarm in cleared:
                 await self.broker.publish(self.output_channel, alarm)
 
-    def _prune(self, window: deque[tuple[float, Message]], now: float) -> None:
-        while window and now - window[0][0] > self.window_s:
+    @staticmethod
+    def _prune(window: deque[tuple[float, Message]], now: float, window_s: float) -> None:
+        while window and now - window[0][0] > window_s:
             window.popleft()
 
     def _clear_expired(self, now: float) -> list[Message]:
         """CLEARED for every kind whose rate has been below threshold for the hold.
 
         The windows are re-evaluated here as well as on arrival: with no event
-        coming in, only the ticker can notice that a window has emptied.
+        coming in, only the ticker can notice that a window has emptied. A kind
+        that stopped being monitored while in alarm clears after its hold.
         """
         out: list[Message] = []
         for kind, entry in self.state.get("kinds", {}).items():
             if entry["status"] != "ALARM":
                 continue
-            self._prune(entry["events"], now)
-            if len(entry["events"]) >= (self._threshold(kind) or 1):
+            threshold = self._threshold(kind)
+            window_s = self._window(kind)
+            hold_s = self._hold(kind)
+            self._prune(entry["events"], now, window_s)
+            if threshold is not None and len(entry["events"]) >= threshold:
                 entry["above_mono"] = now
                 continue
-            if now - entry["above_mono"] < self.hold_s:
+            if now - entry["above_mono"] < hold_s:
                 continue
             episode = entry["episode"]
-            cleared_at = entry["above_ts"] + timedelta(seconds=self.hold_s)
+            cleared_at = entry["above_ts"] + timedelta(seconds=hold_s)
             duration = (cleared_at - episode["started"]).total_seconds()
             entry["status"] = "OK"
             entry["episode"] = None
@@ -1053,10 +1115,10 @@ class RateAlarmTransform(StatefulTransform):
                         "original_value": {
                             "kind": kind,
                             "actual": 0,
-                            "setpoint": self._threshold(kind),
-                            "deviation": -(self._threshold(kind) or 0),
-                            "window_s": self.window_s,
-                            "hold_s": self.hold_s,
+                            "setpoint": threshold,
+                            "deviation": -(threshold or 0),
+                            "window_s": window_s,
+                            "hold_s": hold_s,
                             "events": episode["events"],
                             "peak_count": episode["peak"],
                             "duration_s": round(duration, 3),
@@ -1066,6 +1128,81 @@ class RateAlarmTransform(StatefulTransform):
                 )
             )
         return out
+
+
+def _min_one(value: Any, name: str) -> int:
+    return _at_least(value, name, 1)
+
+
+def _min_zero(value: Any, name: str) -> int:
+    return _at_least(value, name, 0)
+
+
+def _at_least(value: Any, name: str, minimum: int) -> int:
+    count = int(value)
+    if count < minimum:
+        raise ValueError(f"RateAlarmTransform: {name} must be >= {minimum}, got {value!r}")
+    return count
+
+
+def _positive(value: Any, name: str) -> float:
+    seconds = float(value)
+    if seconds <= 0:
+        raise ValueError(f"RateAlarmTransform: {name} must be > 0, got {value!r}")
+    return seconds
+
+
+def _non_negative(value: Any, name: str) -> float:
+    seconds = float(value)
+    if seconds < 0:
+        raise ValueError(f"RateAlarmTransform: {name} must be >= 0, got {value!r}")
+    return seconds
+
+
+def _kind_map[T](
+    value: dict[str, Any] | None, name: str, convert: Callable[[Any, str], T]
+) -> dict[str, T]:
+    """Validate a kind -> value mapping and key it case-insensitively."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"RateAlarmTransform: {name} must map kinds to values, got {value!r}")
+    return {str(k).casefold(): convert(v, f"{name}[{k!r}]") for k, v in value.items()}
+
+
+#: What ``per_kind`` may override for a kind, and how each value is checked.
+_KIND_OVERRIDES: dict[str, Callable[[Any, str], float]] = {
+    "min_count": _min_zero,
+    "window_s": _positive,
+    "hold_s": _non_negative,
+}
+
+
+def _per_kind_overrides(value: dict[str, Any] | None) -> dict[str, dict[str, float]]:
+    """Validate ``per_kind``; a ``None`` drops an override, an unknown name is refused."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"RateAlarmTransform: per_kind must map kinds to overrides, got {value!r}")
+    out: dict[str, dict[str, float]] = {}
+    for kind, overrides in value.items():
+        if overrides is None:
+            continue
+        where = f"per_kind[{kind!r}]"
+        if not isinstance(overrides, dict):
+            raise ValueError(f"RateAlarmTransform: {where} must be a mapping, got {overrides!r}")
+        unknown = sorted(set(overrides) - set(_KIND_OVERRIDES))
+        if unknown:
+            raise ValueError(
+                f"RateAlarmTransform: {where} has unknown keys {unknown}; "
+                f"expected {', '.join(_KIND_OVERRIDES)}"
+            )
+        out[str(kind).casefold()] = {
+            name: _KIND_OVERRIDES[name](v, f"{where}.{name}")
+            for name, v in overrides.items()
+            if v is not None
+        }
+    return out
 
 
 def _scalar_fields(value: Any) -> dict[str, Any]:

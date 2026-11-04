@@ -30,6 +30,22 @@ _logger = structlog.get_logger()
 MERGE_HISTORY = 500
 
 
+def _deep_merge(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """``update`` over ``current``, descending into the mappings both sides hold.
+
+    A fragment ``{"Gap": {"min_count": 140}}`` changes that one leaf and keeps
+    Gap's other entries, as a flat fragment keeps the other top-level keys.
+    Neither argument is modified.
+    """
+    merged = dict(current)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class ParameterStore:
     """Subscribes to a broker channel and rebinds an attribute on the owner."""
 
@@ -89,11 +105,19 @@ class ParameterStore:
 
         old = self._current
         lock = self._owner_lock()
-        if lock is not None:
-            async with lock:
+        try:
+            if lock is not None:
+                async with lock:
+                    setattr(self.owner, self.param_name, new_value)
+            else:
                 setattr(self.owner, self.param_name, new_value)
-        else:
-            setattr(self.owner, self.param_name, new_value)
+        except (TypeError, ValueError) as e:
+            # The owner refused the value. It keeps the previous one; a value
+            # left in the channel history must not stop the pipeline at start.
+            _logger.warning(
+                "Parameter value rejected", param=self.param_name, ref=self.ref, error=str(e)
+            )
+            return
         self._current = new_value
 
         if not emit_event:
@@ -125,7 +149,7 @@ class ParameterStore:
             if not isinstance(raw, dict):
                 return None
             current = self._current if isinstance(self._current, dict) else {}
-            return {**current, **raw}
+            return _deep_merge(current, raw)
         return raw
 
     def _owner_lock(self) -> asyncio.Lock | None:

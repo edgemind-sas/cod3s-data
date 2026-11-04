@@ -47,7 +47,8 @@ class ParamRef(BaseModel):
         description=(
             "Merge dict-valued messages into the current value instead of replacing it. "
             "For parameters fed by partial updates, where each message carries only the "
-            "entries that changed."
+            "entries that changed. Nested mappings are merged too, so a fragment can "
+            "change one leaf of a nested entry."
         ),
     )
 
