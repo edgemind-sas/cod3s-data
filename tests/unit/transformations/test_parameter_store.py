@@ -124,6 +124,36 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    async def test_merge_descends_into_nested_mappings(self):
+        """A fragment changing one leaf of a nested entry keeps that entry's other leaves."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        default = {"Gap": {"min_count": 130, "window_s": 10.0}, "Blob": {"min_count": 12}}
+        owner = SimpleNamespace(per_kind=default)
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="per_kind",
+            ref="params.k",
+            default=default,
+            merge=True,
+        )
+        await store.start()
+
+        await broker.publish("params.k", _msg({"Gap": {"min_count": 140}}))
+        await asyncio.sleep(0.05)
+        await broker.publish("params.k", _msg({"Scars": {"min_count": 1}}))
+        await asyncio.sleep(0.05)
+
+        assert owner.per_kind == {
+            "Gap": {"min_count": 140, "window_s": 10.0},
+            "Blob": {"min_count": 12},
+            "Scars": {"min_count": 1},
+        }
+        assert default == {"Gap": {"min_count": 130, "window_s": 10.0}, "Blob": {"min_count": 12}}
+        await store.stop()
+        await broker.stop()
+
     async def test_merge_replays_whole_history_at_start(self):
         """Hydrating from the last message only would rebuild a single entry."""
         broker = InMemoryBroker(enable_metrics=False)

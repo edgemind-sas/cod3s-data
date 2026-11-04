@@ -30,6 +30,22 @@ _logger = structlog.get_logger()
 MERGE_HISTORY = 500
 
 
+def _deep_merge(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """``update`` over ``current``, descending into the mappings both sides hold.
+
+    A fragment ``{"Gap": {"min_count": 140}}`` changes that one leaf and keeps
+    Gap's other entries, as a flat fragment keeps the other top-level keys.
+    Neither argument is modified.
+    """
+    merged = dict(current)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class ParameterStore:
     """Subscribes to a broker channel and rebinds an attribute on the owner."""
 
@@ -125,7 +141,7 @@ class ParameterStore:
             if not isinstance(raw, dict):
                 return None
             current = self._current if isinstance(self._current, dict) else {}
-            return {**current, **raw}
+            return _deep_merge(current, raw)
         return raw
 
     def _owner_lock(self) -> asyncio.Lock | None:
