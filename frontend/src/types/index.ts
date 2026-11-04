@@ -22,6 +22,7 @@ export type EventType =
   | 'debug.step_result'
   | 'error.occurred'
   | 'param.updated'
+  | 'param.update_result'
 
 /** Channel info for a topology node */
 export interface ChannelInfo {
@@ -149,6 +150,12 @@ export interface Param {
   key: string | null
   default: unknown
   current: unknown
+}
+
+/** WebSocket payload answering a param.update command */
+export interface ParamUpdateResult {
+  status: string
+  message?: string
 }
 
 /** WebSocket payload for param.updated events */

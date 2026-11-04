@@ -31,6 +31,8 @@ async def update_param(channel: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Body must contain 'value'")
     bridge = request.app.state.bridge
     result: dict[str, Any] = await bridge.update_param(channel, body["value"], body.get("key"))
+    if result.get("status") == "rejected":
+        raise HTTPException(status_code=422, detail=result["message"])
     if result.get("status") != "ok":
         raise HTTPException(status_code=500, detail=result.get("message", "publish failed"))
     return result

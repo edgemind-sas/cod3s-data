@@ -193,6 +193,47 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    def test_rejection_reports_without_touching_the_owner(self):
+        class Owner:
+            def __init__(self):
+                self._limit = 10
+
+            @property
+            def limit(self):
+                return self._limit
+
+            @limit.setter
+            def limit(self, value):
+                if value < 0:
+                    raise ValueError("limit must be >= 0")
+                self._limit = value
+
+        owner = Owner()
+        store = ParameterStore(
+            broker=InMemoryBroker(enable_metrics=False),
+            owner=owner,
+            param_name="limit",
+            ref="params.l",
+            default=10,
+        )
+
+        assert store.rejection(-1) == "limit must be >= 0"
+        assert store.rejection(20) is None
+        assert owner.limit == 10
+
+    def test_rejection_of_a_merging_store_needs_a_mapping(self):
+        store = ParameterStore(
+            broker=InMemoryBroker(enable_metrics=False),
+            owner=SimpleNamespace(bounds={}),
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+
+        assert store.rejection(42.0) == "bounds expects a mapping, got 42.0"
+        assert store.rejection({"TopMIN": 295.0}) is None
+
     async def test_merge_replays_whole_history_at_start(self):
         """Hydrating from the last message only would rebuild a single entry."""
         broker = InMemoryBroker(enable_metrics=False)

@@ -15,6 +15,11 @@ from cod3s_data.observatory.bridge import ObservatoryBridge
 from .conftest import PARAM_CHANNEL, make_message
 
 
+def _refuse_negative(_owner: object, value: float) -> None:
+    if value < 0:
+        raise ValueError("setpoint must be positive")
+
+
 async def _seed_topology(bridge: ObservatoryBridge) -> None:
     """Record the component states and subscriptions a running pipeline emits."""
     await bridge.on_component_state_change("src-0", "source", "idle", "running")
@@ -169,6 +174,22 @@ class TestParams:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
         assert transform.setpoint == 220.0
+
+    async def test_refused_value_is_422_and_not_published(
+        self, client: TestClient, framework: Framework
+    ) -> None:
+        class Picky:
+            setpoint = property(lambda self: 200.0, _refuse_negative)
+
+        store = framework.transformations[0]._param_stores[0]
+        store.owner = Picky()
+        await framework.broker.start()
+
+        response = client.post(f"/api/params/{PARAM_CHANNEL}", json={"value": -1.0})
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "setpoint must be positive"
+        assert framework.broker.get_history(PARAM_CHANNEL, count=1) == []
 
     async def test_update_without_value_is_400(self, client: TestClient) -> None:
         response = client.post(f"/api/params/{PARAM_CHANNEL}", json={"key": "extruder"})

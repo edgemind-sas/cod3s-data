@@ -554,6 +554,10 @@ class ObservatoryBridge:
         initial YAML default was a float (``10.0``) and a later operator
         edit comes in as an int (``50``). All numeric setpoints/tolerances
         are floats by convention, so the coercion is harmless.
+
+        A value a subscribed component would refuse is not published: the
+        result has status ``rejected`` and the component's reason, and the
+        value stays out of the channel history.
         """
         from datetime import datetime
 
@@ -565,6 +569,10 @@ class ObservatoryBridge:
         broker = self._framework.broker
         payload = {key: value} if key else value
         payload = _coerce_ints_to_floats(payload)
+        for comp in self._components():
+            for store in getattr(comp, "_param_stores", []):
+                if store.ref == channel and (reason := store.rejection(payload)):
+                    return {"status": "rejected", "channel": channel, "message": reason}
         message = Message(
             key=channel,
             timestamp=datetime.now(UTC),
@@ -581,6 +589,16 @@ class ObservatoryBridge:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    def _components(self) -> list[Any]:
+        """Every source, transformation and destination of the pipeline."""
+        if self._framework is None:
+            return []
+        return [
+            *self._framework.sources,
+            *self._framework.transformations,
+            *self._framework.destinations,
+        ]
+
     def get_editable_params(self) -> list[dict[str, Any]]:
         """Snapshot of all parameters declared via ``ParamRef``.
 
@@ -591,11 +609,7 @@ class ObservatoryBridge:
         if self._framework is None:
             return []
         out: list[dict[str, Any]] = []
-        for comp in (
-            list(self._framework.sources)
-            + list(self._framework.transformations)
-            + list(self._framework.destinations)
-        ):
+        for comp in self._components():
             for store in getattr(comp, "_param_stores", []):
                 out.append(
                     {

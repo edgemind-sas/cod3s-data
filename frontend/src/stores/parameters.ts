@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Param, ParamUpdatedEvent } from '@/types'
+import type { Param, ParamUpdatedEvent, ParamUpdateResult } from '@/types'
 
 export const useParametersStore = defineStore('parameters', () => {
   const params = ref<Param[]>([])
@@ -32,5 +32,9 @@ export const useParametersStore = defineStore('parameters', () => {
     }
   }
 
-  return { params, loading, error, fetchAll, applyUpdate }
+  function applyResult(result: ParamUpdateResult) {
+    error.value = result.status === 'ok' ? null : (result.message ?? 'Update failed')
+  }
+
+  return { params, loading, error, fetchAll, applyUpdate, applyResult }
 })

@@ -207,6 +207,10 @@ export const useConnectionStore = defineStore('connection', () => {
         parametersStore.applyUpdate(msg.payload as any)
         break
 
+      case 'param.update_result':
+        parametersStore.applyResult(msg.payload as any)
+        break
+
       // The server sends plain 'error' for a failed command; only 'error.occurred'
       // was handled, so an inspect that missed its cache went nowhere and the
       // panel stayed on its spinner for good.
