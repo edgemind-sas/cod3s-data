@@ -154,6 +154,45 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    async def test_rejected_value_keeps_the_previous_one(self):
+        """A value the owner refuses changes nothing, live or replayed from history."""
+
+        class Owner:
+            def __init__(self):
+                self._limit = 10
+
+            @property
+            def limit(self):
+                return self._limit
+
+            @limit.setter
+            def limit(self, value):
+                if value < 0:
+                    raise ValueError("limit must be >= 0")
+                self._limit = value
+
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        await broker.publish("params.l", _msg(-1))
+
+        owner = Owner()
+        store = ParameterStore(
+            broker=broker, owner=owner, param_name="limit", ref="params.l", default=10
+        )
+        await store.start()
+        assert owner.limit == 10
+
+        await broker.publish("params.l", _msg(-2))
+        await asyncio.sleep(0.05)
+        assert owner.limit == 10
+        assert store.current == 10
+
+        await broker.publish("params.l", _msg(20))
+        await asyncio.sleep(0.05)
+        assert owner.limit == 20
+        await store.stop()
+        await broker.stop()
+
     async def test_merge_replays_whole_history_at_start(self):
         """Hydrating from the last message only would rebuild a single entry."""
         broker = InMemoryBroker(enable_metrics=False)

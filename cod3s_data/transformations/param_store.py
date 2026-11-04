@@ -105,11 +105,19 @@ class ParameterStore:
 
         old = self._current
         lock = self._owner_lock()
-        if lock is not None:
-            async with lock:
+        try:
+            if lock is not None:
+                async with lock:
+                    setattr(self.owner, self.param_name, new_value)
+            else:
                 setattr(self.owner, self.param_name, new_value)
-        else:
-            setattr(self.owner, self.param_name, new_value)
+        except (TypeError, ValueError) as e:
+            # The owner refused the value. It keeps the previous one; a value
+            # left in the channel history must not stop the pipeline at start.
+            _logger.warning(
+                "Parameter value rejected", param=self.param_name, ref=self.ref, error=str(e)
+            )
+            return
         self._current = new_value
 
         if not emit_event:
