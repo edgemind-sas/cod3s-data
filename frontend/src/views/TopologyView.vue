@@ -48,15 +48,21 @@
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
-            <div v-for="ch in data.channels.publishes" :key="ch" class="pipeline-node__channel">
-              &rarr; {{ ch }}
+            <div v-if="(data.channels.parameters || []).length" class="pipeline-node__group">
+              <div class="pipeline-node__group-title"><v-icon size="11" color="blue">mdi-login</v-icon> Inputs</div>
+              <div
+                v-for="p in data.channels.parameters || []"
+                :key="'param-'+p.param"
+                class="pipeline-node__channel pipeline-node__channel--param"
+              >
+                &#9881; {{ p.param }} : {{ p.channel }}
+              </div>
             </div>
-            <div
-              v-for="p in data.channels.parameters || []"
-              :key="'param-'+p.param"
-              class="pipeline-node__channel pipeline-node__channel--param"
-            >
-              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            <div class="pipeline-node__group">
+              <div class="pipeline-node__group-title"><v-icon size="11" color="orange">mdi-logout</v-icon> Outputs</div>
+              <div v-for="ch in data.channels.publishes" :key="ch" class="pipeline-node__channel">
+                {{ ch }}
+              </div>
             </div>
             <Handle
               v-if="(data.channels.parameters || []).length"
@@ -89,18 +95,24 @@
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
-            <div v-for="ch in data.channels.subscribes" :key="'in-'+ch" class="pipeline-node__channel">
-              &larr; {{ ch }}
+            <div class="pipeline-node__group">
+              <div class="pipeline-node__group-title"><v-icon size="11" color="blue">mdi-login</v-icon> Inputs</div>
+              <div v-for="ch in data.channels.subscribes" :key="'in-'+ch" class="pipeline-node__channel">
+                {{ ch }}
+              </div>
+              <div
+                v-for="p in data.channels.parameters || []"
+                :key="'param-'+p.param"
+                class="pipeline-node__channel pipeline-node__channel--param"
+              >
+                &#9881; {{ p.param }} : {{ p.channel }}
+              </div>
             </div>
-            <div v-for="ch in data.channels.publishes" :key="'out-'+ch" class="pipeline-node__channel">
-              &rarr; {{ ch }}
-            </div>
-            <div
-              v-for="p in data.channels.parameters || []"
-              :key="'param-'+p.param"
-              class="pipeline-node__channel pipeline-node__channel--param"
-            >
-              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            <div class="pipeline-node__group">
+              <div class="pipeline-node__group-title"><v-icon size="11" color="orange">mdi-logout</v-icon> Outputs</div>
+              <div v-for="ch in data.channels.publishes" :key="'out-'+ch" class="pipeline-node__channel">
+                {{ ch }}
+              </div>
             </div>
             <Handle
               v-if="(data.channels.parameters || []).length"
@@ -133,15 +145,18 @@
             <v-chip :color="stateColor(data.state)" size="x-small" class="mt-1">
               {{ data.state }}
             </v-chip>
-            <div v-for="ch in data.channels.subscribes" :key="ch" class="pipeline-node__channel">
-              &larr; {{ ch }}
-            </div>
-            <div
-              v-for="p in data.channels.parameters || []"
-              :key="'param-'+p.param"
-              class="pipeline-node__channel pipeline-node__channel--param"
-            >
-              &#9881; {{ p.param }} &larr; {{ p.channel }}
+            <div class="pipeline-node__group">
+              <div class="pipeline-node__group-title"><v-icon size="11" color="blue">mdi-login</v-icon> Inputs</div>
+              <div v-for="ch in data.channels.subscribes" :key="ch" class="pipeline-node__channel">
+                {{ ch }}
+              </div>
+              <div
+                v-for="p in data.channels.parameters || []"
+                :key="'param-'+p.param"
+                class="pipeline-node__channel pipeline-node__channel--param"
+              >
+                &#9881; {{ p.param }} : {{ p.channel }}
+              </div>
             </div>
             <Handle
               v-if="(data.channels.parameters || []).length"
@@ -172,7 +187,19 @@ import { useTopologyStore } from '@/stores/topology'
 import AnimatedEdge from '@/components/edges/AnimatedEdge.vue'
 
 const NODE_WIDTH = 220
-const NODE_HEIGHT = 100
+// Card height for the layout: the header, then one line per channel and a title
+// per group. A fixed height let tall cards overlap their neighbours.
+const NODE_HEADER_HEIGHT = 90
+const NODE_LINE_HEIGHT = 16
+const NODE_GROUP_HEIGHT = 20
+
+function nodeHeight(node: FlowNode): number {
+  const channels = node.data?.channels ?? {}
+  const inputs = (channels.subscribes?.length ?? 0) + (channels.parameters?.length ?? 0)
+  const outputs = channels.publishes?.length ?? 0
+  const groups = Number(inputs > 0) + Number(outputs > 0)
+  return NODE_HEADER_HEIGHT + (inputs + outputs) * NODE_LINE_HEIGHT + groups * NODE_GROUP_HEIGHT
+}
 
 const topologyStore = useTopologyStore()
 const selectedNodeId = ref<string | null>(null)
@@ -229,7 +256,7 @@ function applyDagreLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
   g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 120 })
 
   for (const node of nodes) {
-    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
+    g.setNode(node.id, { width: NODE_WIDTH, height: nodeHeight(node) })
   }
   for (const edge of edges) {
     // Parameter edges connect without weighing on the ranking: the data flow
@@ -245,7 +272,7 @@ function applyDagreLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
       ...node,
       position: {
         x: pos.x - NODE_WIDTH / 2,
-        y: pos.y - NODE_HEIGHT / 2,
+        y: pos.y - nodeHeight(node) / 2,
       },
     }
   })
@@ -449,6 +476,17 @@ function stateColor(state: string): string {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.4);
   margin-top: 1px;
+}
+
+.pipeline-node__group {
+  margin-top: 6px;
+}
+
+.pipeline-node__group-title {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .pipeline-node__channel {
