@@ -1232,12 +1232,21 @@ transformations:
 - `default: Any = None` - Value used until the first message arrives on `ref`
 - `key: str | None = None` - When the channel publishes dict-valued messages,
   extract this key from the dict
+- `merge: bool = False` - When each message carries only *part* of a dict
+  value, merge it into the current value instead of replacing it. Nested
+  mappings are merged too, so `{"Gap": {"min_count": 140}}` changes that one
+  leaf.
 
 At construction the factory substitutes `default` and attaches a
 `ParameterStore` to the component. The store subscribes to `ref` and rebinds
 the attribute on every new message; it also reads the channel's history at
 `start()`, so a transform that starts after the parameter was published is
-hydrated before its first data message arrives. Parameter references work on
+hydrated before its first data message arrives. A `merge` reference replays
+everything the broker kept for the channel, oldest first, so the latest
+fragment of each key wins. That history is bounded by `broker.history_size`
+(100 messages per channel by default): when it is full, the oldest fragments
+may already be gone, and the store logs a warning. Raise `history_size` for a
+channel that accumulates many fragments. Parameter references work on
 sources, transformations and destinations alike, and nest one level deep — a
 `ParamRef` must appear as a direct value in `params`, not inside a nested dict
 or list.
