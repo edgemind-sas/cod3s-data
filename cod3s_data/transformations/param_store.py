@@ -8,8 +8,8 @@ component via ``component._param_stores``. The owning component lifecycle
 Reads the latest value from broker history at ``start()`` so a transform
 that begins after the parameter source has already published is hydrated
 synchronously before its first data message arrives. A merging store replays
-the whole recent history instead, since each message holds only a fragment of
-the value.
+everything the broker kept for the channel instead, oldest first, since each
+message holds only a fragment of the value.
 """
 
 from __future__ import annotations
@@ -25,9 +25,10 @@ from cod3s_data.core.message import Message
 
 _logger = structlog.get_logger()
 
-#: Messages replayed at ``start()`` to rebuild a merging parameter. One message
-#: is enough when a store replaces its value; a merging one has to see every
-#: fragment, so it reaches back far enough to cover a session's worth of edits.
+#: Messages replayed at ``start()`` to rebuild a merging parameter, when the
+#: broker does not say how much history it keeps per channel. A store that
+#: replaces its value needs one message; a merging one has to see every fragment.
+#: Either way the broker's own per-channel history is the real bound.
 MERGE_HISTORY = 500
 
 
@@ -97,13 +98,32 @@ class ParameterStore:
     async def start(self) -> None:
         """Hydrate from history then subscribe for live updates.
 
-        A merging store replays the recent history in order: each message
-        carries only part of the value, so keeping the last one would rebuild a
-        single fragment and silently lose the rest.
+        A merging store replays the history the broker kept for the channel:
+        each message carries only part of the value, so keeping the last one
+        would rebuild a single fragment and silently lose the rest. The replay
+        runs oldest first — ``get_history`` returns newest first, and applied
+        in that order an old fragment would overwrite a newer one for the same
+        key.
         """
-        count = MERGE_HISTORY if self.merge else 1
-        for message in self.broker.get_history(self.ref, count=count):
+        kept = getattr(self.broker, "default_history_size", None)
+        if not self.merge:
+            count = 1
+        elif isinstance(kept, int) and kept > 0:
+            count = kept
+        else:
+            count = MERGE_HISTORY
+        history = self.broker.get_history(self.ref, count=count)
+        for message in reversed(history):
             await self._apply(message, emit_event=False)
+        if self.merge and len(history) >= count:
+            # A full buffer may have evicted fragments that nothing replaced:
+            # the value is rebuilt from the most recent ones only.
+            _logger.warning(
+                "Parameter history full, oldest fragments may be lost",
+                param=self.param_name,
+                ref=self.ref,
+                replayed=len(history),
+            )
 
         self._handle = self.broker.subscribe(self.ref, self._on_message)
 

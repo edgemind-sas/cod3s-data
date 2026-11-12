@@ -257,6 +257,83 @@ class TestParameterStore:
         await store.stop()
         await broker.stop()
 
+    async def test_merge_replay_keeps_latest_fragment_per_key(self):
+        """History comes back newest first; replayed as is, the oldest would win."""
+        broker = InMemoryBroker(enable_metrics=False)
+        await broker.start()
+        for value in (290.0, 300.0, 310.0):  # the same bound, moved three times
+            await broker.publish("params.b", _msg({"TopMAX": value}))
+        await broker.publish("params.b", _msg({"TopMIN": 280.0}))
+        await asyncio.sleep(0.05)
+
+        owner = SimpleNamespace(bounds={})
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+        await store.start()
+
+        assert owner.bounds == {"TopMAX": 310.0, "TopMIN": 280.0}
+        await store.stop()
+        await broker.stop()
+
+    async def test_merge_replays_what_the_broker_keeps_and_warns_when_full(self, monkeypatch):
+        broker = InMemoryBroker(default_history_size=3, enable_metrics=False)
+        await broker.start()
+        for key in ("A", "B", "C", "D"):  # "A" is evicted from a 3-message history
+            await broker.publish("params.b", _msg({key: 1}))
+        await asyncio.sleep(0.05)
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            "cod3s_data.transformations.param_store._logger.warning",
+            lambda event, **_: warnings.append(event),
+        )
+        owner = SimpleNamespace(bounds={})
+        store = ParameterStore(
+            broker=broker,
+            owner=owner,
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+        await store.start()
+
+        assert owner.bounds == {"B": 1, "C": 1, "D": 1}
+        assert warnings == ["Parameter history full, oldest fragments may be lost"]
+        await store.stop()
+        await broker.stop()
+
+    async def test_merge_does_not_warn_below_capacity(self, monkeypatch):
+        broker = InMemoryBroker(default_history_size=3, enable_metrics=False)
+        await broker.start()
+        await broker.publish("params.b", _msg({"A": 1}))
+        await asyncio.sleep(0.05)
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            "cod3s_data.transformations.param_store._logger.warning",
+            lambda event, **_: warnings.append(event),
+        )
+        store = ParameterStore(
+            broker=broker,
+            owner=SimpleNamespace(bounds={}),
+            param_name="bounds",
+            ref="params.b",
+            default={},
+            merge=True,
+        )
+        await store.start()
+
+        assert warnings == []
+        await store.stop()
+        await broker.stop()
+
     async def test_merge_ignores_non_dict_message(self):
         broker = InMemoryBroker(enable_metrics=False)
         await broker.start()
